@@ -1,0 +1,224 @@
+name: CI - Tests et Validation
+
+on:
+  push:
+    branches: [main, develop, feature/*, fix/*]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.13"
+  POETRY_VERSION: "1.8.2"
+
+jobs:
+  # =============================================================================
+  # Linting et Formatage du Code
+  # =============================================================================
+  lint:
+    name: Ruff - Linting et Formatage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      - name: Configuration de Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Installation de Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: ${{ env.POETRY_VERSION }}
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Cache des dépendances Poetry
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('**/poetry.lock') }}
+          restore-keys: |
+            venv-${{ runner.os }}-${{ env.PYTHON_VERSION }}-
+
+      - name: Installation des dépendances
+        run: poetry install --no-interaction --no-root
+
+      - name: Vérification du code avec Ruff (linting)
+        run: poetry run ruff check .
+
+      - name: Vérification du formatage avec Ruff
+        run: poetry run ruff format --check .
+
+  # =============================================================================
+  # Tests Unitaires et Couverture
+  # =============================================================================
+  test:
+    name: Tests - Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13"]
+
+    services:
+postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: core-africare-identity
+          POSTGRES_PASSWORD: vd8bveedbnBpMcYr_8qB6A
+          POSTGRES_DB: core-africare-identity_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      - name: Configuration de Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Installation de Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: ${{ env.POETRY_VERSION }}
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Cache des dépendances Poetry
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/poetry.lock') }}
+          restore-keys: |
+            venv-${{ runner.os }}-${{ matrix.python-version }}-
+
+      - name: Installation des dépendances
+        run: poetry install --no-interaction
+
+      - name: Exécution des tests avec coverage
+        env:
+          # Service Identity
+          PROJECT_NAME: core-africare-identity
+          PROJECT_SLUG: identity
+          ENVIRONMENT: test
+          DEBUG: "false"
+          # API Configuration
+          API_GATEWAY_URL: http://localhost:8000
+          # Database (test)
+SQLALCHEMY_DATABASE_URI: postgresql+asyncpg://core-africare-identity:vd8bveedbnBpMcYr_8qB6A@localhost:5432/core-africare-identity_test
+# Keycloak (mock pour tests)
+          KEYCLOAK_SERVER_URL: http://localhost:8080
+          KEYCLOAK_REALM: test
+          KEYCLOAK_CLIENT_ID: test-client
+          KEYCLOAK_CLIENT_SECRET: test-secret
+          # Azure Event Hub (mock pour tests)
+          AZURE_EVENTHUB_NAMESPACE: test.servicebus.windows.net
+          AZURE_EVENTHUB_NAME: core-africare-identity
+          AZURE_EVENTHUB_CONSUMER_GROUP: test-group
+          AZURE_EVENTHUB_CONSUMER_SOURCES: ""
+          AZURE_EVENTHUB_CONNECTION_STRING: ""
+          AZURE_BLOB_STORAGE_ACCOUNT_URL: https://test.blob.core.windows.net
+          AZURE_EVENTHUB_BLOB_STORAGE_CONTAINER_NAME: test-checkpoints
+          AZURE_EVENTHUB_BLOB_STORAGE_CONNECTION_STRING: ""
+          # OpenTelemetry (désactivé pour tests)
+          OTEL_SERVICE_NAME: core-africare-identity
+          OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:4317
+          OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+          OTEL_EXPORTER_OTLP_INSECURE: "true"
+          OTEL_LOGS_EXPORTER: console
+          OTEL_TRACES_EXPORTER: console
+          OTEL_METRICS_EXPORTER: console
+          # CORS
+          ALLOWED_ORIGINS: http://localhost:3000
+          TRUSTED_HOSTS: localhost,127.0.0.1
+          # i18n
+          SUPPORTED_LOCALES: fr,en
+          DEFAULT_LOCALE: fr
+        run: poetry run pytest --cov=app --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          flags: unittests
+          name: codecov-core-africare-identity
+          fail_ci_if_error: false
+
+  # =============================================================================
+  # Validation de la Construction Docker
+  # =============================================================================
+  docker-build:
+    name: Docker - Validation de Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: core-africare-identity:ci-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # =============================================================================
+  # Vérification de Sécurité des Dépendances
+  # =============================================================================
+  security:
+    name: Sécurité - Scan des Vulnérabilités
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      - name: Configuration de Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Installation de Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: ${{ env.POETRY_VERSION }}
+
+      - name: Installation de safety
+        run: pip install safety
+
+      - name: Scan des vulnérabilités avec Safety
+        run: |
+          poetry export -f requirements.txt --output requirements.txt --without-hashes
+          safety check --file requirements.txt --continue-on-error
+
+  # =============================================================================
+  # Summary Job - Résumé des Résultats CI
+  # =============================================================================
+  ci-success:
+    name: CI - Résumé
+    runs-on: ubuntu-latest
+    needs: [lint, test, docker-build, security]
+    if: always()
+    steps:
+      - name: Vérification du statut global
+        run: |
+          if ${{ contains(needs.*.result, 'failure') }}; then
+            echo "Un ou plusieurs jobs CI ont échoué"
+            exit 1
+          elif ${{ contains(needs.*.result, 'cancelled') }}; then
+            echo "Un ou plusieurs jobs CI ont été annulés"
+            exit 1
+          else
+            echo "Tous les jobs CI ont réussi"
+          fi

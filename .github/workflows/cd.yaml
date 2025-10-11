@@ -1,0 +1,201 @@
+name: CD - Déploiement Continu
+
+on:
+  push:
+    branches:
+      - main          # Production
+      - develop       # Staging
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environnement cible'
+        required: true
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  # =============================================================================
+  # Détermination de l'Environnement Cible
+  # =============================================================================
+  determine-environment:
+    name: Détermination Environnement
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+    steps:
+      - name: Définir l'environnement cible
+        id: set-env
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "environment=production" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" = "refs/heads/develop" ]; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          else
+            echo "environment=development" >> $GITHUB_OUTPUT
+          fi
+
+  # =============================================================================
+  # Build et Push de l'Image Docker
+  # =============================================================================
+  build-and-push:
+    name: Build & Push - Image Docker
+    runs-on: ubuntu-latest
+    needs: determine-environment
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=${{ needs.determine-environment.outputs.environment }}-
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ needs.determine-environment.outputs.environment }}-latest
+
+      - name: Build et Push de l'image Docker
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            ENVIRONMENT=${{ needs.determine-environment.outputs.environment }}
+
+  # =============================================================================
+  # Déploiement sur Azure Container Apps
+  # =============================================================================
+  deploy:
+    name: Déploiement - ${{ needs.determine-environment.outputs.environment }}
+    runs-on: ubuntu-latest
+    needs: [determine-environment, build-and-push]
+    environment: ${{ needs.determine-environment.outputs.environment }}
+    steps:
+      - name: Checkout du code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Déploiement sur Azure Container Apps
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          containerAppName: core-africare-identity
+          resourceGroup: rg-africare-${{ needs.determine-environment.outputs.environment }}
+          imageToDeploy: ${{ needs.build-and-push.outputs.image-tag }}
+          environmentVariables: |
+            ENVIRONMENT=${{ needs.determine-environment.outputs.environment }}
+            PROJECT_NAME=${{ vars.PROJECT_NAME }}
+            PROJECT_SLUG=${{ vars.PROJECT_SLUG }}
+            API_GATEWAY_URL=${{ vars.API_GATEWAY_URL }}
+            KEYCLOAK_SERVER_URL=secretref:keycloak-server-url
+            KEYCLOAK_REALM=secretref:keycloak-realm
+            KEYCLOAK_CLIENT_ID=secretref:keycloak-client-id
+            KEYCLOAK_CLIENT_SECRET=secretref:keycloak-client-secret
+SQLALCHEMY_DATABASE_URI=secretref:sqlalchemy-database-uri
+AZURE_EVENTHUB_NAMESPACE=${{ vars.AZURE_EVENTHUB_NAMESPACE }}
+            AZURE_EVENTHUB_NAME=${{ vars.AZURE_EVENTHUB_NAME }}
+            AZURE_EVENTHUB_CONSUMER_GROUP=${{ vars.AZURE_EVENTHUB_CONSUMER_GROUP }}
+            AZURE_EVENTHUB_CONSUMER_SOURCES=${{ vars.AZURE_EVENTHUB_CONSUMER_SOURCES }}
+            AZURE_BLOB_STORAGE_ACCOUNT_URL=${{ vars.AZURE_BLOB_STORAGE_ACCOUNT_URL }}
+            AZURE_EVENTHUB_BLOB_STORAGE_CONTAINER_NAME=${{ vars.AZURE_EVENTHUB_BLOB_STORAGE_CONTAINER_NAME }}
+            OTEL_SERVICE_NAME=${{ vars.OTEL_SERVICE_NAME }}
+            OTEL_EXPORTER_OTLP_ENDPOINT=${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
+            OTEL_EXPORTER_OTLP_PROTOCOL=${{ vars.OTEL_EXPORTER_OTLP_PROTOCOL }}
+            OTEL_EXPORTER_OTLP_INSECURE=${{ vars.OTEL_EXPORTER_OTLP_INSECURE }}
+            OTEL_LOGS_EXPORTER=otlp
+            OTEL_TRACES_EXPORTER=otlp
+            OTEL_METRICS_EXPORTER=otlp
+            ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}
+            TRUSTED_HOSTS=${{ vars.TRUSTED_HOSTS }}
+            SUPPORTED_LOCALES=${{ vars.SUPPORTED_LOCALES }}
+            DEFAULT_LOCALE=${{ vars.DEFAULT_LOCALE }}
+
+      - name: Vérification de la santé de l'application
+        run: |
+          APP_URL="https://core-africare-identity-${{ needs.determine-environment.outputs.environment }}.africare.sn"
+          echo "Vérification de la santé: $APP_URL/api/v1/health"
+
+          # Attendre 30 secondes pour le démarrage
+          sleep 30
+
+          # Tentatives de health check
+          for i in {1..5}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$APP_URL/api/v1/health" || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "Health check réussi (HTTP $STATUS)"
+              exit 0
+            fi
+            echo "Tentative $i/5 - HTTP $STATUS - Nouvelle tentative dans 10s..."
+            sleep 10
+          done
+
+          echo "Health check échoué après 5 tentatives"
+          exit 1
+
+  # =============================================================================
+  # Notification de Déploiement
+  # =============================================================================
+  notify:
+    name: Notification Déploiement
+    runs-on: ubuntu-latest
+    needs: [determine-environment, build-and-push, deploy]
+    if: always()
+    steps:
+      - name: Résumé du déploiement
+        run: |
+          echo "==================================================================="
+          echo "Déploiement - Résumé"
+          echo "==================================================================="
+          echo "Environnement: ${{ needs.determine-environment.outputs.environment }}"
+          echo "Image: ${{ needs.build-and-push.outputs.image-tag }}"
+          echo "Digest: ${{ needs.build-and-push.outputs.image-digest }}"
+          echo "Statut: ${{ needs.deploy.result }}"
+          echo "==================================================================="
+
+      # Optionnel: Notification Slack, Teams, etc.
+      # - name: Notification Slack
+      #   if: needs.deploy.result == 'success'
+      #   uses: slackapi/slack-github-action@v1
+      #   with:
+      #     webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+      #     payload: |
+      #       {
+      #         "text": "Déploiement réussi de core-africare-identity sur ${{ needs.determine-environment.outputs.environment }}"
+      #       }

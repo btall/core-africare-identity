@@ -1,0 +1,78 @@
+# Exemple de déploiement Azure Container Apps
+# Ce fichier peut être utilisé avec Azure CLI ou Terraform
+
+apiVersion: apps/v1
+kind: ContainerApp
+metadata:
+  name: identity
+spec:
+  configuration:
+    ingress:
+      external: false
+      targetPort: 8000
+    secrets:
+      - name: db-connection
+        value: "postgresql+asyncpg://core-africare-identity:vd8bveedbnBpMcYr_8qB6A@postgres:5432/core-africare-identity"
+      - name: keycloak-secret
+        value: "cYRi-B9OO2Ufd1h1n1SduA"
+  template:
+    containers:
+      - name: identity
+        image: acrname.azurecr.io/identity:latest
+        resources:
+          cpu: 0.5
+          memory: 1Gi
+        env:
+          # Configuration de base
+          - name: ENVIRONMENT
+            value: "production"
+          - name: API_GATEWAY_URL
+            value: "https://api-gateway.internal.africare.sn"
+
+          # Database
+          - name: SQLALCHEMY_DATABASE_URI
+            secretRef: db-connection
+
+          # CORS - Format virgules (recommandé)
+          - name: ALLOWED_ORIGINS
+            value: "https://app.africare.sn,https://admin.africare.sn,https://api.africare.sn"
+
+          # Alternative JSON (si nécessaire)
+          # - name: ALLOWED_ORIGINS
+          #   value: '["https://app.africare.sn","https://admin.africare.sn","https://api.africare.sn"]'
+
+          # Hosts de confiance
+          - name: TRUSTED_HOSTS
+            value: "app.africare.sn,admin.africare.sn,api.africare.sn,*.africare.sn"
+
+          # Langues supportées
+          - name: SUPPORTED_LOCALES
+            value: "fr,en"
+
+          # Azure Event Hub
+          - name: AZURE_EVENTHUB_NAMESPACE
+            value: "africare.servicebus.windows.net"
+          - name: AZURE_EVENTHUB_NAME
+            value: "core-africare-identity"
+          - name: AZURE_EVENTHUB_USE_MANAGED_IDENTITY
+            value: "true"  # Utiliser Managed Identity en production
+
+          # Keycloak
+          - name: KEYCLOAK_SERVER_URL
+            value: "https://keycloak.africare.app/auth"
+          - name: KEYCLOAK_REALM
+            value: "africare"
+          - name: KEYCLOAK_CLIENT_ID
+            value: "core-africare-identity"
+          - name: KEYCLOAK_CLIENT_SECRET
+            secretRef: keycloak-secret
+
+          # OpenTelemetry
+          - name: OTEL_SERVICE_NAME
+            value: "core.africare.identity"
+          - name: OTEL_EXPORTER_OTLP_ENDPOINT
+            value: "https://otel-collector.africare.sn:4317"
+          - name: OTEL_EXPORTER_OTLP_PROTOCOL
+            value: "grpc"
+          - name: OTEL_EXPORTER_OTLP_INSECURE
+            value: "false"

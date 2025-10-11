@@ -1,0 +1,86 @@
+services:
+postgres:
+    image: postgres:18
+    container_name: core-africare-identity-postgres
+    environment:
+      POSTGRES_DB: core-africare-identity
+      POSTGRES_USER: core-africare-identity
+      POSTGRES_PASSWORD: vd8bveedbnBpMcYr_8qB6A
+    ports:
+      - "5432:5432"
+    volumes:
+      - core_africare_identity_postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    networks:
+      - africare-network
+
+core-africare-identity:
+    build: .
+    container_name: core-africare-identity
+    command:
+      - "uvicorn"
+      - "app.main:app"
+      - "--reload"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+    ports:
+      - "8001:8000"
+    volumes:
+      - .:/home/app/web
+    environment:
+      # Service Identity
+      API_GATEWAY_URL: http://api-gateway-service:8000
+      ENVIRONMENT: development
+      DEBUG: "false"
+# PostgreSQL Database
+      SQLALCHEMY_DATABASE_URI: postgresql+asyncpg://core-africare-identity:vd8bveedbnBpMcYr_8qB6A@postgres:5432/core-africare-identity
+# Azure Event Hub Configuration
+      # PRIORITÉ 1 (RECOMMANDÉ): Managed Identity via DefaultAzureCredential
+      AZURE_EVENTHUB_NAMESPACE: africare.servicebus.windows.net
+      AZURE_EVENTHUB_NAME: core-africare-identity
+      AZURE_EVENTHUB_CONSUMER_GROUP: core-africare-identity
+      AZURE_EVENTHUB_CONSUMER_SOURCES: 
+      # PRIORITÉ 2 (FALLBACK): Connection String - optionnel, pour compatibilité uniquement
+      AZURE_EVENTHUB_CONNECTION_STRING: 
+      # Azure Blob Storage Configuration (for checkpoint store)
+      # PRIORITÉ 1 (RECOMMANDÉ): Managed Identity via DefaultAzureCredential
+      AZURE_BLOB_STORAGE_ACCOUNT_URL: https://stafricare.blob.core.windows.net
+      AZURE_EVENTHUB_BLOB_STORAGE_CONTAINER_NAME: eventhub-checkpoints
+      # PRIORITÉ 2 (FALLBACK): Connection String - optionnel, pour compatibilité uniquement
+      AZURE_EVENTHUB_BLOB_STORAGE_CONNECTION_STRING: 
+      # Keycloak Authentication
+      KEYCLOAK_SERVER_URL: https://keycloak.africare.app/auth
+      KEYCLOAK_REALM: africare
+      KEYCLOAK_CLIENT_ID: core-africare-identity
+      KEYCLOAK_CLIENT_SECRET: cYRi-B9OO2Ufd1h1n1SduA
+      # OpenTelemetry
+      OTEL_SERVICE_NAME: core-africare-identity
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://grafana-otel:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_EXPORTER_OTLP_INSECURE: "true"
+      OTEL_LOGS_EXPORTER: otlp
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_LOG_LEVEL: info
+      # OpenTelemetry Python logging
+      OTEL_PYTHON_LOG_LEVEL: info
+      OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED: "true"
+      OTEL_PYTHON_LOG_CORRELATION: "true"
+      # CORS
+      ALLOWED_ORIGINS: "http://localhost:3000,http://localhost:4200,https://app.africare.sn"
+      TRUSTED_HOSTS: "localhost,127.0.0.1,app.africare.sn,*.africare.sn"
+      # Internationalisation (i18n)
+      SUPPORTED_LOCALES: "fr,en"
+      DEFAULT_LOCALE: fr
+depends_on:
+      - postgres
+networks:
+      - africare-network
+
+volumes:
+core_africare_identity_postgres_data:
+networks:
+  africare-network:
+    driver: bridge
