@@ -132,15 +132,6 @@ jobs:
           KEYCLOAK_REALM: test
           KEYCLOAK_CLIENT_ID: test-client
           KEYCLOAK_CLIENT_SECRET: test-secret
-          # Azure Event Hub (mock pour tests)
-          AZURE_EVENTHUB_NAMESPACE: test.servicebus.windows.net
-          AZURE_EVENTHUB_NAME: core-africare-identity
-          AZURE_EVENTHUB_CONSUMER_GROUP: test-group
-          AZURE_EVENTHUB_CONSUMER_SOURCES: ""
-          AZURE_EVENTHUB_CONNECTION_STRING: ""
-          AZURE_BLOB_STORAGE_ACCOUNT_URL: https://test.blob.core.windows.net
-          AZURE_EVENTHUB_BLOB_STORAGE_CONTAINER_NAME: test-checkpoints
-          AZURE_EVENTHUB_BLOB_STORAGE_CONNECTION_STRING: ""
           # OpenTelemetry (désactivé pour tests)
           OTEL_SERVICE_NAME: core-africare-identity
           OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:4317

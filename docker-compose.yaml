@@ -1,5 +1,5 @@
 services:
-postgres:
+  postgres:
     image: postgres:18
     container_name: core-africare-identity-postgres
     environment:
@@ -14,7 +14,18 @@ postgres:
     networks:
       - africare-network
 
-core-africare-identity:
+  redis:
+    image: redis:7-alpine
+    container_name: core-africare-identity-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - core_africare_identity_redis_data:/data
+    networks:
+      - africare-network
+
+  core-africare-identity:
     build: .
     container_name: core-africare-identity
     command:
@@ -34,22 +45,11 @@ core-africare-identity:
       API_GATEWAY_URL: http://api-gateway-service:8000
       ENVIRONMENT: development
       DEBUG: "false"
-# PostgreSQL Database
+      # PostgreSQL Database
       SQLALCHEMY_DATABASE_URI: postgresql+asyncpg://core-africare-identity:vd8bveedbnBpMcYr_8qB6A@postgres:5432/core-africare-identity
-# Azure Event Hub Configuration
-      # PRIORITÉ 1 (RECOMMANDÉ): Managed Identity via DefaultAzureCredential
-      AZURE_EVENTHUB_NAMESPACE: africare.servicebus.windows.net
-      AZURE_EVENTHUB_NAME: core-africare-identity
-      AZURE_EVENTHUB_CONSUMER_GROUP: core-africare-identity
-      AZURE_EVENTHUB_CONSUMER_SOURCES:
-      # PRIORITÉ 2 (FALLBACK): Connection String - optionnel, pour compatibilité uniquement
-      AZURE_EVENTHUB_CONNECTION_STRING:
-      # Azure Blob Storage Configuration (for checkpoint store)
-      # PRIORITÉ 1 (RECOMMANDÉ): Managed Identity via DefaultAzureCredential
-      AZURE_BLOB_STORAGE_ACCOUNT_URL: https://stafricare.blob.core.windows.net
-      AZURE_EVENTHUB_BLOB_STORAGE_CONTAINER_NAME: eventhub-checkpoints
-      # PRIORITÉ 2 (FALLBACK): Connection String - optionnel, pour compatibilité uniquement
-      AZURE_EVENTHUB_BLOB_STORAGE_CONNECTION_STRING:
+      # Redis Messaging (Phase 1 MVP)
+      REDIS_URL: redis://redis:6379
+      REDIS_DB: 0
       # Keycloak Authentication
       KEYCLOAK_SERVER_URL: https://keycloak.africare.app/auth
       KEYCLOAK_REALM: africare
@@ -76,11 +76,13 @@ core-africare-identity:
       DEFAULT_LOCALE: fr
     depends_on:
       - postgres
+      - redis
     networks:
       - africare-network
 
 volumes:
   core_africare_identity_postgres_data:
+  core_africare_identity_redis_data:
 
 networks:
   africare-network:

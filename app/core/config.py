@@ -128,33 +128,10 @@ class Settings(BaseSettings):
     # Base de données
     # PostgreSQL avec SQLAlchemy 2.0
     SQLALCHEMY_DATABASE_URI: PostgresDsn
+
     # Redis Messaging (Phase 1 MVP)
     REDIS_URL: str = "redis://localhost:6379"
     REDIS_DB: int = 0
-    # Azure Event Hub (Phase 2+)
-    # PRIORITÉ 1 (RECOMMANDÉ) : Managed Identity avec DefaultAzureCredential
-    AZURE_EVENTHUB_NAMESPACE: str = (
-        "africare.servicebus.windows.net"  # Ex: africare.servicebus.windows.net
-    )
-    AZURE_EVENTHUB_NAME: str = "core-africare-identity"  # Event Hub pour publier (topic)
-    AZURE_EVENTHUB_CONSUMER_GROUP: str = "core-africare-identity"
-    # Event Hubs à consommer (liste séparée par virgules)
-    # Ex: "core-africare-identity,core-africare-ehr,apps-africare-patient-portal"
-    AZURE_EVENTHUB_CONSUMER_SOURCES: str = ""
-
-    # PRIORITÉ 2 (FALLBACK) : Connection String - optionnel, pour compatibilité uniquement
-    AZURE_EVENTHUB_CONNECTION_STRING: str = ""  # Laisser vide pour utiliser DefaultAzureCredential
-
-    # Azure Blob Storage (checkpoint store)
-    AZURE_EVENTHUB_BLOB_STORAGE_CONTAINER_NAME: str = "eventhub-checkpoints"
-    # PRIORITÉ 1 (RECOMMANDÉ) : Managed Identity avec DefaultAzureCredential
-    AZURE_BLOB_STORAGE_ACCOUNT_URL: str = (
-        "https://stafricare.blob.core.windows.net"  # Ex: https://stafricare.blob.core.windows.net
-    )
-    # PRIORITÉ 2 (FALLBACK) : Connection String - optionnel, pour compatibilité uniquement
-    AZURE_EVENTHUB_BLOB_STORAGE_CONNECTION_STRING: str = (
-        ""  # Laisser vide pour utiliser DefaultAzureCredential
-    )
 
     # Internationalisation (i18n)
     # Liste des langues supportées, ex: ["en", "fr"]
