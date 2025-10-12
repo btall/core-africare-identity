@@ -33,9 +33,7 @@ class PatientBase(BaseModel):
         ..., description="Nom de famille du patient", examples=["Diallo"]
     )
     date_of_birth: date = Field(..., description="Date de naissance", examples=["1990-05-15"])
-    gender: Literal["male", "female"] = Field(
-        ..., description="Sexe biologique (reconnaissance légale sénégalaise)"
-    )
+    gender: Literal["male", "female"] = Field(..., description="Sexe biologique")
 
     # Contact
     email: Email | None = Field(None, description="Adresse email")
