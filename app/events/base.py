@@ -1,9 +1,10 @@
 """Classe de base pour les handlers d'événements."""
+
 import logging
 from abc import ABC, abstractmethod
 
-from azure.eventhub.aio import PartitionContext
 from azure.eventhub import EventData
+from azure.eventhub.aio import PartitionContext
 
 
 class BaseEventHandler(ABC):
@@ -20,7 +21,9 @@ class BaseEventHandler(ABC):
 
     async def handle_error(self, partition_context: PartitionContext, error: Exception):
         """Gère les erreurs lors de la réception des événements."""
-        self.logger.error(f"Erreur lors de la réception des événements pour {self.event_name}: {error}")
+        self.logger.error(
+            f"Erreur lors de la réception des événements pour {self.event_name}: {error}"
+        )
         await partition_context.update_checkpoint(None)
 
     async def on_event(self, partition_context: PartitionContext, event: EventData):

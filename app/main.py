@@ -1,4 +1,5 @@
 from opentelemetry.instrumentation import auto_instrumentation
+
 auto_instrumentation.initialize()
 
 import asyncio
@@ -8,17 +9,18 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi_errors_rfc9457 import RFC9457Config, setup_rfc9457_handlers
 
 # Import automatique de tous les handlers d'événements
 import app.events
 from app.api.v1 import api as api_v1
+
 # Future versions: uncomment when ready
 # from app.api.v2 import api as api_v2
 # from app.api.v3 import api as api_v3
 from app.core.config import settings
-from app.core.events import lifespan as events_lifespan
-from fastapi_errors_rfc9457 import RFC9457Config, setup_rfc9457_handlers
 from app.core.database import create_db_and_tables
+from app.core.events import lifespan as events_lifespan
 from app.services import event_service
 
 # Configuration du logging standard
@@ -44,15 +46,14 @@ async def lifespan(app: FastAPI):
         # Démarrer tous les consommateurs d'événements
         try:
             logger.info("Démarrage du consommateur pour ")
-            tg.create_task(
-                event_service.start_eventhub_consumer_(),
-                name="consumer_"
-            )
+            tg.create_task(event_service.start_eventhub_consumer_(), name="consumer_")
             logger.info("Application startup complete.")
             yield
         finally:
             # Arrêter tous les consommateurs
             logger.info("Arrêt des consommateurs d'événements...")
+
+
 logger.info("Application shutdown complete.")
 
 
@@ -92,11 +93,7 @@ if settings.ENVIRONMENT != "development":
     )
 
 # Include API v1 (current version)
-app.include_router(
-    api_v1.router,
-    prefix=settings.get_api_prefix("v1"),
-    tags=["v1"]
-)
+app.include_router(api_v1.router, prefix=settings.get_api_prefix("v1"), tags=["v1"])
 
 # Future versions: uncomment when ready
 # app.include_router(

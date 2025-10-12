@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     try:
         from app import __version__
     except ImportError:
-        __version__ = "0.1.0" # Version par défaut si non trouvée
+        __version__ = "0.1.0"  # Version par défaut si non trouvée
 
     PROJECT_NAME: str = "core-africare-identity"
     PROJECT_SLUG: str = "identity"
@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     OTEL_TRACES_EXPORTER: Literal["otlp", "console"] = "otlp"
     OTEL_METRICS_EXPORTER: Literal["otlp", "console"] = "otlp"
     # Ces valeurs sont souvent définies par les bibliothèques d'instrumentation, mais peuvent être surchargées
-    OTEL_PYTHON_LOG_LEVEL:str = "info"
+    OTEL_PYTHON_LOG_LEVEL: str = "info"
     OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED: bool = True
     OTEL_PYTHON_LOG_CORRELATION: bool = True
     OTEL_PYTHON_LOG_FORMAT: str = "%(asctime)s %(levelname)s [%(name)s] [%(filename)s:%(lineno)d] [trace_id=%(otelTraceID)s span_id=%(otelSpanID)s resource.service.name=%(otelServiceName)s trace_sampled=%(otelTraceSampled)s] - %(message)s"
@@ -99,7 +99,7 @@ class Settings(BaseSettings):
     # Définir dans .env, ex: TRUSTED_HOSTS='["localhost","127.0.0.1"]'
     TRUSTED_HOSTS: ConfigurableList = ["localhost", "127.0.0.1"]
 
-    @field_validator("ALLOWED_ORIGINS", mode='before')
+    @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
     def assemble_cors_origins(cls, v: ConfigurableList) -> list[str]:
         """
@@ -110,7 +110,7 @@ class Settings(BaseSettings):
         """
         return parse_list_from_env(v, "ALLOWED_ORIGINS")
 
-    @field_validator("TRUSTED_HOSTS", mode='before')
+    @field_validator("TRUSTED_HOSTS", mode="before")
     @classmethod
     def assemble_trusted_hosts(cls, v: ConfigurableList) -> list[str]:
         """Parse TRUSTED_HOSTS depuis une variable d'environnement."""
@@ -122,10 +122,7 @@ class Settings(BaseSettings):
     # Deployment Configuration
     DEPLOYMENT_TARGET: Literal["local", "azure-aca"] = "local"
     DEPLOYMENT_PHASE: Literal[
-        "phase1-mvp",
-        "phase2-extension",
-        "phase3-scaling",
-        "phase4-national"
+        "phase1-mvp", "phase2-extension", "phase3-scaling", "phase4-national"
     ] = "phase1-mvp"
 
     # Base de données
@@ -136,7 +133,9 @@ class Settings(BaseSettings):
     REDIS_DB: int = 0
     # Azure Event Hub (Phase 2+)
     # PRIORITÉ 1 (RECOMMANDÉ) : Managed Identity avec DefaultAzureCredential
-    AZURE_EVENTHUB_NAMESPACE: str = "africare.servicebus.windows.net"  # Ex: africare.servicebus.windows.net
+    AZURE_EVENTHUB_NAMESPACE: str = (
+        "africare.servicebus.windows.net"  # Ex: africare.servicebus.windows.net
+    )
     AZURE_EVENTHUB_NAME: str = "core-africare-identity"  # Event Hub pour publier (topic)
     AZURE_EVENTHUB_CONSUMER_GROUP: str = "core-africare-identity"
     # Event Hubs à consommer (liste séparée par virgules)
@@ -149,16 +148,20 @@ class Settings(BaseSettings):
     # Azure Blob Storage (checkpoint store)
     AZURE_EVENTHUB_BLOB_STORAGE_CONTAINER_NAME: str = "eventhub-checkpoints"
     # PRIORITÉ 1 (RECOMMANDÉ) : Managed Identity avec DefaultAzureCredential
-    AZURE_BLOB_STORAGE_ACCOUNT_URL: str = "https://stafricare.blob.core.windows.net"  # Ex: https://stafricare.blob.core.windows.net
+    AZURE_BLOB_STORAGE_ACCOUNT_URL: str = (
+        "https://stafricare.blob.core.windows.net"  # Ex: https://stafricare.blob.core.windows.net
+    )
     # PRIORITÉ 2 (FALLBACK) : Connection String - optionnel, pour compatibilité uniquement
-    AZURE_EVENTHUB_BLOB_STORAGE_CONNECTION_STRING: str = ""  # Laisser vide pour utiliser DefaultAzureCredential
+    AZURE_EVENTHUB_BLOB_STORAGE_CONNECTION_STRING: str = (
+        ""  # Laisser vide pour utiliser DefaultAzureCredential
+    )
 
     # Internationalisation (i18n)
     # Liste des langues supportées, ex: ["en", "fr"]
     SUPPORTED_LOCALES: ConfigurableList = ["fr", "en"]
-    DEFAULT_LOCALE: str = "fr" # Langue par défaut
+    DEFAULT_LOCALE: str = "fr"  # Langue par défaut
 
-    @field_validator("SUPPORTED_LOCALES", mode='before')
+    @field_validator("SUPPORTED_LOCALES", mode="before")
     @classmethod
     def assemble_supported_locales(cls, v: ConfigurableList) -> list[str]:
         """Parse SUPPORTED_LOCALES depuis une variable d'environnement."""
@@ -168,25 +171,26 @@ class Settings(BaseSettings):
     @property
     def OTEL_RESOURCE_ATTRIBUTES(self) -> Resource:  # noqa: N802
         """Crée l'objet Resource pour OpenTelemetry avec les attributs du service."""
-        return Resource(attributes={
-            "service.name": self.OTEL_SERVICE_NAME,
-            "service.version": self.VERSION,
-            "service.environment": self.ENVIRONMENT,
-            # Convertir le booléen en chaîne pour les attributs OTEL
-            "service.debug": str(self.DEBUG).lower(),
-        })
+        return Resource(
+            attributes={
+                "service.name": self.OTEL_SERVICE_NAME,
+                "service.version": self.VERSION,
+                "service.environment": self.ENVIRONMENT,
+                # Convertir le booléen en chaîne pour les attributs OTEL
+                "service.debug": str(self.DEBUG).lower(),
+            }
+        )
 
     @computed_field
     @property
     def api_gateway_url(self) -> str:
         """API Gateway URL with latest API version."""
         joined_url = urllib.parse.urljoin(
-            str(self.API_GATEWAY_URL),
-            f"/api/{self.API_LATEST_VERSION}"
+            str(self.API_GATEWAY_URL), f"/api/{self.API_LATEST_VERSION}"
         )
         return joined_url
 
-    def get_api_prefix(self, version: str = None) -> str:
+    def get_api_prefix(self, version: str | None = None) -> str:
         """
         Get API prefix for a specific version.
 
@@ -202,6 +206,7 @@ class Settings(BaseSettings):
     class Config:
         case_sensitive = True
         env_file = ".env"
+
 
 # Instance unique des paramètres chargée depuis .env
 settings = Settings()

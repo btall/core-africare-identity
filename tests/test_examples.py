@@ -7,11 +7,10 @@ Tests avec SQLAlchemy 2.0 et PostgreSQL.
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.pool import StaticPool
 
-from app.core.database import get_session, Base
-from app.models.example import Example
+from app.core.database import Base, get_session
 from app.main import app
 
 
@@ -38,8 +37,7 @@ def test_create_example(test_session):
     """Test de création d'exemple (PostgreSQL)."""
     client = TestClient(app)
     response = client.post(
-        f"/{app.title}/examples/",
-        json={"name": "Test Example", "description": "Test description"}
+        f"/{app.title}/examples/", json={"name": "Test Example", "description": "Test description"}
     )
     assert response.status_code == 200
     data = response.json()
@@ -55,8 +53,7 @@ def test_get_example(test_session):
 
     # Créer d'abord un exemple
     create_response = client.post(
-        f"/{app.title}/examples/",
-        json={"name": "Get Test", "description": "Get description"}
+        f"/{app.title}/examples/", json={"name": "Get Test", "description": "Get description"}
     )
     created_example = create_response.json()
 
@@ -89,15 +86,14 @@ def test_update_example(test_session):
 
     # Créer un exemple
     create_response = client.post(
-        f"/{app.title}/examples/",
-        json={"name": "Original", "description": "Original description"}
+        f"/{app.title}/examples/", json={"name": "Original", "description": "Original description"}
     )
     created_example = create_response.json()
 
     # Mettre à jour l'exemple
     response = client.put(
         f"/{app.title}/examples/{created_example['id']}",
-        json={"name": "Updated", "description": "Updated description"}
+        json={"name": "Updated", "description": "Updated description"},
     )
     assert response.status_code == 200
     data = response.json()
@@ -110,10 +106,7 @@ def test_delete_example(test_session):
     client = TestClient(app)
 
     # Créer un exemple
-    create_response = client.post(
-        f"/{app.title}/examples/",
-        json={"name": "To Delete"}
-    )
+    create_response = client.post(f"/{app.title}/examples/", json={"name": "To Delete"})
     created_example = create_response.json()
 
     # Supprimer l'exemple
@@ -123,6 +116,8 @@ def test_delete_example(test_session):
     # Vérifier qu'il n'existe plus
     get_response = client.get(f"/{app.title}/examples/{created_example['id']}")
     assert get_response.status_code == 404
+
+
 def test_health_check():
     """Test du health check (commun aux deux bases)."""
     client = TestClient(app)

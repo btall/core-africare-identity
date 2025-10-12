@@ -38,12 +38,7 @@ class EventBusInterface(ABC):
     """
 
     @abstractmethod
-    async def publish(
-        self,
-        subject: str,
-        payload: dict | BaseModel,
-        max_retries: int = 3
-    ) -> None:
+    async def publish(self, subject: str, payload: dict | BaseModel, max_retries: int = 3) -> None:
         """
         Publie un événement.
 

@@ -24,9 +24,11 @@ if config.config_file_name is not None:
 # SQLAlchemy utilise Base.metadata
 target_metadata = Base.metadata
 
+
 def get_url():
     # Utiliser les settings pour obtenir l'URL de la base de données
     return settings.SQLALCHEMY_DATABASE_URI.unicode_string()
+
 
 def run_migrations_offline() -> None:
     """Exécute les migrations en mode 'offline'.
@@ -45,21 +47,23 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        compare_type=True, # Activer la comparaison de types
+        compare_type=True,  # Activer la comparaison de types
     )
 
     with context.begin_transaction():
         context.run_migrations()
+
 
 def do_run_migrations(connection: Connection) -> None:
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
-        compare_type=True, # Activer la comparaison de types
+        compare_type=True,  # Activer la comparaison de types
     )
 
     with context.begin_transaction():
         context.run_migrations()
+
 
 async def run_async_migrations() -> None:
     """Exécute les migrations en mode 'online'.
@@ -81,14 +85,16 @@ async def run_async_migrations() -> None:
 
     await connectable.dispose()
 
+
 def run_migrations_online() -> None:
     """Exécute les migrations en mode 'online'."""
     asyncio.run(run_async_migrations())
+
 
 if context.is_offline_mode():
     # Offline mode n'est pas géré pour l'asyncio
     # raise NotImplementedError("Les migrations hors ligne ne sont pas supportées pour l'asyncio")
     # On utilise la version synchrone pour le mode offline
-     run_migrations_offline()
+    run_migrations_offline()
 else:
     run_migrations_online()

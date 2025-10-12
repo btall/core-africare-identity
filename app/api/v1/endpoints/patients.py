@@ -239,10 +239,9 @@ async def search_patients(
     Permissions requises : admin ou professional
     """
     # Vérifier les permissions
-    if (
-        "admin" not in current_user.get("realm_access", {}).get("roles", [])
-        and "professional" not in current_user.get("realm_access", {}).get("roles", [])
-    ):
+    if "admin" not in current_user.get("realm_access", {}).get(
+        "roles", []
+    ) and "professional" not in current_user.get("realm_access", {}).get("roles", []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Accès non autorisé à la liste des patients",
@@ -292,10 +291,9 @@ async def verify_patient(
     Permissions requises : professional ou admin
     """
     # Vérifier les permissions
-    if (
-        "admin" not in current_user.get("realm_access", {}).get("roles", [])
-        and "professional" not in current_user.get("realm_access", {}).get("roles", [])
-    ):
+    if "admin" not in current_user.get("realm_access", {}).get(
+        "roles", []
+    ) and "professional" not in current_user.get("realm_access", {}).get("roles", []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Seuls les professionnels de santé peuvent vérifier des patients",

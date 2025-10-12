@@ -63,7 +63,7 @@ jobs:
         python-version: ["3.13"]
 
     services:
-postgres:
+      postgres:
         image: postgres:18
         env:
           POSTGRES_USER: core-africare-identity
@@ -76,7 +76,8 @@ postgres:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-steps:
+
+    steps:
       - name: Checkout du code
         uses: actions/checkout@v4
 
@@ -113,8 +114,8 @@ steps:
           # API Configuration
           API_GATEWAY_URL: http://localhost:8000
           # Database (test)
-SQLALCHEMY_DATABASE_URI: postgresql+asyncpg://core-africare-identity:vd8bveedbnBpMcYr_8qB6A@localhost:5432/core-africare-identity_test
-# Keycloak (mock pour tests)
+          SQLALCHEMY_DATABASE_URI: postgresql+asyncpg://core-africare-identity:vd8bveedbnBpMcYr_8qB6A@localhost:5432/core-africare-identity_test
+          # Keycloak (mock pour tests)
           KEYCLOAK_SERVER_URL: http://localhost:8080
           KEYCLOAK_REALM: test
           KEYCLOAK_CLIENT_ID: test-client

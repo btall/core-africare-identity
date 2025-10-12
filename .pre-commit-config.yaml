@@ -1,0 +1,70 @@
+# Configuration pre-commit pour core-africare-identity
+# Voir https://pre-commit.com pour plus d'informations
+
+repos:
+  # Hooks de base
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        name: Suppression des espaces en fin de ligne
+      - id: end-of-file-fixer
+        name: Assure qu'il y a une ligne vide en fin de fichier
+      - id: check-yaml
+        name: Validation de la syntaxe YAML
+      - id: check-json
+        name: Validation de la syntaxe JSON
+      - id: check-toml
+        name: Validation de la syntaxe TOML
+      - id: check-added-large-files
+        name: Détection de fichiers volumineux (>500KB)
+        args: ['--maxkb=500']
+      - id: check-merge-conflict
+        name: Détection de marqueurs de conflit de merge
+      - id: mixed-line-ending
+        name: Normalisation des fins de ligne
+
+  # Ruff - Linting et formatting Python
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.0
+    hooks:
+      - id: ruff
+        name: Ruff linting
+        args: [--fix]
+      - id: ruff-format
+        name: Ruff formatting
+
+  # MyPy - Type checking (optionnel, commenté par défaut)
+  # - repo: https://github.com/pre-commit/mirrors-mypy
+  #   rev: v1.18.2
+  #   hooks:
+  #     - id: mypy
+  #       name: MyPy type checking
+  #       args: [--no-strict-optional, --ignore-missing-imports]
+  #       additional_dependencies: [types-all]
+
+  # Validation des secrets (optionnel, commenté par défaut)
+  # - repo: https://github.com/Yelp/detect-secrets
+  #   rev: v1.5.0
+  #   hooks:
+  #     - id: detect-secrets
+  #       name: Détection de secrets
+  #       args: ['--baseline', '.secrets.baseline']
+
+# Configuration globale
+default_language_version:
+  python: python3.13
+
+# Fichiers à exclure
+exclude: |
+  (?x)^(
+      alembic/versions/.*|
+      .*/__pycache__/.*|
+      .*/\..*|
+      .*\.pyc|
+      .*/build/.*|
+      .*/dist/.*
+  )$
+
+# Hooks à exécuter à certains moments
+fail_fast: false

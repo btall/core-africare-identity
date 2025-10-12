@@ -4,13 +4,10 @@ Tests unitaires pour le middleware RFC 9457 Problem Details.
 
 from datetime import datetime
 
-import pytest
 from fastapi import APIRouter, FastAPI, HTTPException
-from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
-from pydantic import BaseModel, field_validator
-
 from fastapi_errors_rfc9457 import RFC9457Config, setup_rfc9457_handlers
+from pydantic import BaseModel, field_validator
 
 from app.core.exceptions import (
     AfriCareException,
@@ -81,9 +78,7 @@ async def endpoint_validation_error():
     """Endpoint déclenchant une ValidationError."""
     raise ValidationError(
         detail="Invalid input",
-        errors=[
-            {"loc": ["body", "email"], "msg": "Invalid email format", "type": "value_error"}
-        ],
+        errors=[{"loc": ["body", "email"], "msg": "Invalid email format", "type": "value_error"}],
     )
 
 
@@ -298,9 +293,7 @@ class TestAfriCareExceptions:
         """Test création ValidationError."""
         exc = ValidationError(
             detail="Invalid email format",
-            errors=[
-                {"loc": ["body", "email"], "msg": "Invalid format", "type": "value_error"}
-            ],
+            errors=[{"loc": ["body", "email"], "msg": "Invalid format", "type": "value_error"}],
         )
 
         assert exc.status_code == 400
@@ -389,9 +382,7 @@ class TestOpenAPISchemas:
             instance="/api/v1/users",
             trace_id="abc123",
             timestamp="2025-10-09T09:50:56.209911+00:00",
-            errors=[
-                {"loc": ["body", "email"], "msg": "Invalid email", "type": "value_error"}
-            ],
+            errors=[{"loc": ["body", "email"], "msg": "Invalid email", "type": "value_error"}],
         )
 
         assert validation_error.status == 422
@@ -425,7 +416,7 @@ class TestOpenAPISchemas:
         assert 500 in COMMON_RESPONSES
 
         # Vérifier structure de chaque réponse
-        for status_code, response_spec in COMMON_RESPONSES.items():
+        for _status_code, response_spec in COMMON_RESPONSES.items():
             assert "model" in response_spec
             assert "description" in response_spec
             assert "content" in response_spec
@@ -524,9 +515,7 @@ class TestTimestampUTC:
 
     def test_timestamp_in_request_validation_error(self):
         """Test timestamp dans RequestValidationError."""
-        response = client.post(
-            "/test/request-validation", json={"name": "John", "age": 200}
-        )
+        response = client.post("/test/request-validation", json={"name": "John", "age": 200})
 
         data = response.json()
         assert "timestamp" in data

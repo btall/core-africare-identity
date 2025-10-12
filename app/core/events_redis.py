@@ -20,9 +20,9 @@ import asyncio
 import json
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Callable, Awaitable
 
 import redis.asyncio as redis
 from fastapi import FastAPI
@@ -53,7 +53,7 @@ async def init_redis():
         db=settings.REDIS_DB,
         decode_responses=True,
         socket_timeout=5.0,
-        socket_connect_timeout=5.0
+        socket_connect_timeout=5.0,
     )
     # Test connexion
     await redis_client.ping()
@@ -98,7 +98,7 @@ async def publish(subject: str, payload: dict | BaseModel, max_retries: int = 3)
         "id": message_id,
         "subject": subject,
         "timestamp": datetime.now(UTC).isoformat(),
-        "data": payload_dict
+        "data": payload_dict,
     }
 
     # Telemetry
@@ -109,9 +109,7 @@ async def publish(subject: str, payload: dict | BaseModel, max_retries: int = 3)
     }
 
     with tracer.start_as_current_span(
-        f"publish.{subject}",
-        kind=trace.SpanKind.PRODUCER,
-        attributes=span_attributes
+        f"publish.{subject}", kind=trace.SpanKind.PRODUCER, attributes=span_attributes
     ) as span:
         # Retry avec backoff exponentiel
         last_exception = None
@@ -121,24 +119,22 @@ async def publish(subject: str, payload: dict | BaseModel, max_retries: int = 3)
                 await redis_client.publish(subject, json.dumps(event_data))
 
                 logger.debug(f"Événement '{subject}' publié avec ID: {message_id}")
-                span.add_event("Événement publié avec succès", {
-                    "attempt": attempt + 1
-                })
+                span.add_event("Événement publié avec succès", {"attempt": attempt + 1})
                 return  # Succès
 
             except Exception as e:
                 last_exception = e
-                wait_time = 2 ** attempt  # Backoff: 1s, 2s, 4s
+                wait_time = 2**attempt  # Backoff: 1s, 2s, 4s
 
                 if attempt < max_retries - 1:
                     logger.warning(
                         f"Échec publication '{subject}' (tentative {attempt + 1}/{max_retries}): {e}. "
                         f"Retry dans {wait_time}s"
                     )
-                    span.add_event(f"Retry après échec (tentative {attempt + 1})", {
-                        "error": str(e),
-                        "wait_time": wait_time
-                    })
+                    span.add_event(
+                        f"Retry après échec (tentative {attempt + 1})",
+                        {"error": str(e), "wait_time": wait_time},
+                    )
                     await asyncio.sleep(wait_time)
                 else:
                     # Dernière tentative échouée
@@ -151,12 +147,14 @@ async def publish(subject: str, payload: dict | BaseModel, max_retries: int = 3)
 
 def subscribe(subject: str):
     """Décorateur pour enregistrer un handler."""
+
     def decorator(func: Callable[[dict], Awaitable[None]]) -> Callable[[dict], Awaitable[None]]:
         if subject not in handlers:
             handlers[subject] = []
         handlers[subject].append(func)
         logger.info(f"Handler '{func.__name__}' enregistré pour '{subject}'")
         return func
+
     return decorator
 
 
@@ -198,7 +196,7 @@ async def consume_messages():
                     with tracer.start_as_current_span(
                         f"consume.{subject}",
                         kind=trace.SpanKind.CONSUMER,
-                        attributes=span_attributes
+                        attributes=span_attributes,
                     ) as span:
                         # Exécuter les handlers
                         subject_handlers = handlers.get(subject, [])
@@ -209,19 +207,23 @@ async def consume_messages():
                             try:
                                 await handler(payload)
                                 handlers_executed += 1
-                                logger.debug(f"Handler '{handler.__name__}' exécuté pour '{subject}'")
+                                logger.debug(
+                                    f"Handler '{handler.__name__}' exécuté pour '{subject}'"
+                                )
                             except Exception as e:
                                 handlers_failed += 1
                                 logger.error(
                                     f"Erreur handler '{handler.__name__}' pour '{subject}': {e}",
-                                    exc_info=True
+                                    exc_info=True,
                                 )
                                 span.record_exception(e)
 
-                        span.set_attributes({
-                            "handlers.executed": handlers_executed,
-                            "handlers.failed": handlers_failed,
-                        })
+                        span.set_attributes(
+                            {
+                                "handlers.executed": handlers_executed,
+                                "handlers.failed": handlers_failed,
+                            }
+                        )
 
                 except json.JSONDecodeError as e:
                     logger.error(f"Erreur décodage JSON pour '{subject}': {e}")
@@ -283,9 +285,4 @@ async def get_publisher():
     return publish
 
 
-__all__ = [
-    "publish",
-    "subscribe",
-    "get_publisher",
-    "lifespan"
-]
+__all__ = ["get_publisher", "lifespan", "publish", "subscribe"]

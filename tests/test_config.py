@@ -1,4 +1,5 @@
 import pytest
+
 from app.core.config import parse_list_from_env
 
 
@@ -52,7 +53,7 @@ class TestParseListFromEnv:
         assert result == [
             "http://localhost:3000",
             "https://api.example.com",
-            "https://app.example.com"
+            "https://app.example.com",
         ]
 
     def test_parse_hosts_with_wildcards(self):

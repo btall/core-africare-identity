@@ -4,8 +4,7 @@ Ce module implémente la logique métier pour les opérations CRUD
 et la recherche sur les professionnels.
 """
 
-from datetime import datetime, UTC
-from typing import Optional
+from datetime import UTC, datetime
 
 from opentelemetry import trace
 from sqlalchemy import func, select
@@ -77,10 +76,7 @@ async def create_professional(
         return professional
 
 
-async def get_professional(
-    db: AsyncSession,
-    professional_id: int
-) -> Optional[Professional]:
+async def get_professional(db: AsyncSession, professional_id: int) -> Professional | None:
     """
     Récupère un professionnel par son ID.
 
@@ -94,9 +90,7 @@ async def get_professional(
     with tracer.start_as_current_span("get_professional") as span:
         span.set_attribute("professional.id", professional_id)
 
-        result = await db.execute(
-            select(Professional).where(Professional.id == professional_id)
-        )
+        result = await db.execute(select(Professional).where(Professional.id == professional_id))
         professional = result.scalar_one_or_none()
 
         if professional:
@@ -108,9 +102,8 @@ async def get_professional(
 
 
 async def get_professional_by_keycloak_id(
-    db: AsyncSession,
-    keycloak_user_id: str
-) -> Optional[Professional]:
+    db: AsyncSession, keycloak_user_id: str
+) -> Professional | None:
     """
     Récupère un professionnel par son keycloak_user_id.
 
@@ -125,9 +118,7 @@ async def get_professional_by_keycloak_id(
         span.set_attribute("professional.keycloak_user_id", keycloak_user_id)
 
         result = await db.execute(
-            select(Professional).where(
-                Professional.keycloak_user_id == keycloak_user_id
-            )
+            select(Professional).where(Professional.keycloak_user_id == keycloak_user_id)
         )
         professional = result.scalar_one_or_none()
 
@@ -141,9 +132,8 @@ async def get_professional_by_keycloak_id(
 
 
 async def get_professional_by_professional_id(
-    db: AsyncSession,
-    professional_id: str
-) -> Optional[Professional]:
+    db: AsyncSession, professional_id: str
+) -> Professional | None:
     """
     Récupère un professionnel par son numéro d'ordre professionnel.
 
@@ -158,9 +148,7 @@ async def get_professional_by_professional_id(
         span.set_attribute("professional.professional_id", professional_id)
 
         result = await db.execute(
-            select(Professional).where(
-                Professional.professional_id == professional_id
-            )
+            select(Professional).where(Professional.professional_id == professional_id)
         )
         professional = result.scalar_one_or_none()
 
@@ -176,7 +164,7 @@ async def update_professional(
     professional_id: int,
     professional_data: ProfessionalUpdate,
     current_user_id: str,
-) -> Optional[Professional]:
+) -> Professional | None:
     """
     Met à jour un professionnel existant.
 
@@ -271,7 +259,7 @@ async def delete_professional(
         return True
 
 
-async def search_professionals(
+async def search_professionals(  # noqa: C901
     db: AsyncSession,
     filters: ProfessionalSearchFilters,
 ) -> tuple[list[ProfessionalListItem], int]:
@@ -291,37 +279,21 @@ async def search_professionals(
 
         # Application des filtres
         if filters.first_name:
-            query = query.where(
-                Professional.first_name.ilike(f"%{filters.first_name}%")
-            )
+            query = query.where(Professional.first_name.ilike(f"%{filters.first_name}%"))
         if filters.last_name:
-            query = query.where(
-                Professional.last_name.ilike(f"%{filters.last_name}%")
-            )
+            query = query.where(Professional.last_name.ilike(f"%{filters.last_name}%"))
         if filters.professional_id:
-            query = query.where(
-                Professional.professional_id == filters.professional_id
-            )
+            query = query.where(Professional.professional_id == filters.professional_id)
         if filters.specialty:
-            query = query.where(
-                Professional.specialty.ilike(f"%{filters.specialty}%")
-            )
+            query = query.where(Professional.specialty.ilike(f"%{filters.specialty}%"))
         if filters.professional_type:
-            query = query.where(
-                Professional.professional_type == filters.professional_type
-            )
+            query = query.where(Professional.professional_type == filters.professional_type)
         if filters.facility_name:
-            query = query.where(
-                Professional.facility_name.ilike(f"%{filters.facility_name}%")
-            )
+            query = query.where(Professional.facility_name.ilike(f"%{filters.facility_name}%"))
         if filters.facility_city:
-            query = query.where(
-                Professional.facility_city == filters.facility_city
-            )
+            query = query.where(Professional.facility_city == filters.facility_city)
         if filters.facility_region:
-            query = query.where(
-                Professional.facility_region == filters.facility_region
-            )
+            query = query.where(Professional.facility_region == filters.facility_region)
         if filters.is_active is not None:
             query = query.where(Professional.is_active == filters.is_active)
         if filters.is_verified is not None:
@@ -348,9 +320,7 @@ async def search_professionals(
         span.add_event("Recherche terminée")
 
         # Convertir en ProfessionalListItem
-        professional_items = [
-            ProfessionalListItem.model_validate(prof) for prof in professionals
-        ]
+        professional_items = [ProfessionalListItem.model_validate(prof) for prof in professionals]
 
         return professional_items, total
 
@@ -359,7 +329,7 @@ async def verify_professional(
     db: AsyncSession,
     professional_id: int,
     current_user_id: str,
-) -> Optional[Professional]:
+) -> Professional | None:
     """
     Marque un professionnel comme vérifié.
 
@@ -406,7 +376,7 @@ async def toggle_availability(
     professional_id: int,
     is_available: bool,
     current_user_id: str,
-) -> Optional[Professional]:
+) -> Professional | None:
     """
     Change la disponibilité d'un professionnel pour consultations.
 

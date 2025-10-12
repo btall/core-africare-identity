@@ -41,15 +41,15 @@ core-africare-identity:
       AZURE_EVENTHUB_NAMESPACE: africare.servicebus.windows.net
       AZURE_EVENTHUB_NAME: core-africare-identity
       AZURE_EVENTHUB_CONSUMER_GROUP: core-africare-identity
-      AZURE_EVENTHUB_CONSUMER_SOURCES: 
+      AZURE_EVENTHUB_CONSUMER_SOURCES:
       # PRIORITÉ 2 (FALLBACK): Connection String - optionnel, pour compatibilité uniquement
-      AZURE_EVENTHUB_CONNECTION_STRING: 
+      AZURE_EVENTHUB_CONNECTION_STRING:
       # Azure Blob Storage Configuration (for checkpoint store)
       # PRIORITÉ 1 (RECOMMANDÉ): Managed Identity via DefaultAzureCredential
       AZURE_BLOB_STORAGE_ACCOUNT_URL: https://stafricare.blob.core.windows.net
       AZURE_EVENTHUB_BLOB_STORAGE_CONTAINER_NAME: eventhub-checkpoints
       # PRIORITÉ 2 (FALLBACK): Connection String - optionnel, pour compatibilité uniquement
-      AZURE_EVENTHUB_BLOB_STORAGE_CONNECTION_STRING: 
+      AZURE_EVENTHUB_BLOB_STORAGE_CONNECTION_STRING:
       # Keycloak Authentication
       KEYCLOAK_SERVER_URL: https://keycloak.africare.app/auth
       KEYCLOAK_REALM: africare
@@ -74,13 +74,14 @@ core-africare-identity:
       # Internationalisation (i18n)
       SUPPORTED_LOCALES: "fr,en"
       DEFAULT_LOCALE: fr
-depends_on:
+    depends_on:
       - postgres
-networks:
+    networks:
       - africare-network
 
 volumes:
-core_africare_identity_postgres_data:
+  core_africare_identity_postgres_data:
+
 networks:
   africare-network:
     driver: bridge

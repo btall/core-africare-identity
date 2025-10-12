@@ -101,7 +101,7 @@ else
 fi
 
 
-# Event Hub pour 
+# Event Hub pour
 echo "  📢 Création de l'Event Hub ''..."
 if az eventhubs eventhub show --name "" --namespace-name $NAMESPACE_NAME --resource-group $RESOURCE_GROUP &> /dev/null; then
     echo "  ℹ️  Event Hub '' existe déjà"

@@ -1,8 +1,8 @@
 import logging
-from typing import Optional, Annotated
+from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from keycloak import KeycloakOpenID
 from opentelemetry import trace
 from opentelemetry.instrumentation.logging import LoggingInstrumentor
@@ -19,20 +19,21 @@ keycloak_openid = KeycloakOpenID(
     server_url=settings.KEYCLOAK_SERVER_URL,
     client_id=settings.KEYCLOAK_CLIENT_ID,
     realm_name=settings.KEYCLOAK_REALM,
-    client_secret_key=settings.KEYCLOAK_CLIENT_SECRET
+    client_secret_key=settings.KEYCLOAK_CLIENT_SECRET,
 )
 
 # Security scheme for Bearer token
 security_scheme = HTTPBearer()
 
+
 class User(BaseModel):
     sub: str  # Keycloak user ID
-    email: Optional[str] = None
-    preferred_username: Optional[str] = None
-    given_name: Optional[str] = None
-    family_name: Optional[str] = None
-    realm_access: Optional[dict] = None
-    resource_access: Optional[dict] = None
+    email: str | None = None
+    preferred_username: str | None = None
+    given_name: str | None = None
+    family_name: str | None = None
+    realm_access: dict | None = None
+    resource_access: dict | None = None
 
 
 async def verify_token(token: str) -> dict:
@@ -55,15 +56,13 @@ async def verify_token(token: str) -> dict:
 
 
 async def get_token_data(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security_scheme)]
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security_scheme)],
 ) -> dict:
     """Extract and verify token from HTTP Bearer credentials."""
     return await verify_token(credentials.credentials)
 
 
-async def get_current_user(
-    token_data: Annotated[dict, Depends(get_token_data)]
-) -> dict:
+async def get_current_user(token_data: Annotated[dict, Depends(get_token_data)]) -> dict:
     """
     Get current user from verified Keycloak token.
 
@@ -77,9 +76,7 @@ async def get_current_user(
         return token_data
 
 
-async def get_current_user_model(
-    token_data: Annotated[dict, Depends(get_token_data)]
-) -> User:
+async def get_current_user_model(token_data: Annotated[dict, Depends(get_token_data)]) -> User:
     """Get current user as Pydantic User model from verified Keycloak token."""
     with tracer.start_as_current_span("get_current_user_model") as span:
         try:
@@ -135,6 +132,7 @@ def require_roles(*roles: str, require_all: bool = False):
         # Single role check
         @router.get("/patient-only", dependencies=[Depends(require_roles("patient"))])
     """
+
     async def role_checker(current_user: User = Depends(get_current_user_model)) -> User:
         with tracer.start_as_current_span("check_user_roles") as span:
             span.set_attribute("auth.required_roles", ",".join(roles))
@@ -147,8 +145,13 @@ def require_roles(*roles: str, require_all: bool = False):
             if current_user.realm_access and "roles" in current_user.realm_access:
                 user_roles.extend(current_user.realm_access["roles"])
 
-            if current_user.resource_access and settings.KEYCLOAK_CLIENT_ID in current_user.resource_access:
-                client_roles = current_user.resource_access[settings.KEYCLOAK_CLIENT_ID].get("roles", [])
+            if (
+                current_user.resource_access
+                and settings.KEYCLOAK_CLIENT_ID in current_user.resource_access
+            ):
+                client_roles = current_user.resource_access[settings.KEYCLOAK_CLIENT_ID].get(
+                    "roles", []
+                )
                 user_roles.extend(client_roles)
 
             span.set_attribute("auth.user_roles", ",".join(user_roles))
@@ -192,15 +195,13 @@ def require_roles(*roles: str, require_all: bool = False):
 
 
 # Convenience dependencies for common role checks (backward compatibility)
-async def get_current_patient(
-    current_user: User = Depends(require_roles("patient"))
-) -> User:
+async def get_current_patient(current_user: User = Depends(require_roles("patient"))) -> User:
     """Get current user with patient role validation."""
     return current_user
 
 
 async def get_current_professional(
-    current_user: User = Depends(require_roles("professional"))
+    current_user: User = Depends(require_roles("professional")),
 ) -> User:
     """Get current user with professional role validation."""
     return current_user

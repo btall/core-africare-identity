@@ -5,9 +5,11 @@ Base de données: PostgreSQL avec SQLModel et AsyncSession
 """
 
 import logging
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -15,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 class Base(DeclarativeBase):
     """Base class pour tous les modèles SQLAlchemy."""
+
     pass
 
 

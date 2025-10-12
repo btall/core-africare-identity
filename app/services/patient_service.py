@@ -4,8 +4,7 @@ Ce module implémente la logique métier pour les opérations CRUD
 et la recherche sur les patients.
 """
 
-from datetime import datetime, UTC
-from typing import Optional
+from datetime import UTC, datetime
 
 from opentelemetry import trace
 from sqlalchemy import func, select
@@ -75,7 +74,7 @@ async def create_patient(
         return patient
 
 
-async def get_patient(db: AsyncSession, patient_id: int) -> Optional[Patient]:
+async def get_patient(db: AsyncSession, patient_id: int) -> Patient | None:
     """
     Récupère un patient par son ID.
 
@@ -100,10 +99,7 @@ async def get_patient(db: AsyncSession, patient_id: int) -> Optional[Patient]:
         return patient
 
 
-async def get_patient_by_keycloak_id(
-    db: AsyncSession,
-    keycloak_user_id: str
-) -> Optional[Patient]:
+async def get_patient_by_keycloak_id(db: AsyncSession, keycloak_user_id: str) -> Patient | None:
     """
     Récupère un patient par son keycloak_user_id.
 
@@ -131,10 +127,7 @@ async def get_patient_by_keycloak_id(
         return patient
 
 
-async def get_patient_by_national_id(
-    db: AsyncSession,
-    national_id: str
-) -> Optional[Patient]:
+async def get_patient_by_national_id(db: AsyncSession, national_id: str) -> Patient | None:
     """
     Récupère un patient par son identifiant national.
 
@@ -148,9 +141,7 @@ async def get_patient_by_national_id(
     with tracer.start_as_current_span("get_patient_by_national_id") as span:
         span.set_attribute("patient.national_id", national_id)
 
-        result = await db.execute(
-            select(Patient).where(Patient.national_id == national_id)
-        )
+        result = await db.execute(select(Patient).where(Patient.national_id == national_id))
         patient = result.scalar_one_or_none()
 
         if patient:
@@ -165,7 +156,7 @@ async def update_patient(
     patient_id: int,
     patient_data: PatientUpdate,
     current_user_id: str,
-) -> Optional[Patient]:
+) -> Patient | None:
     """
     Met à jour un patient existant.
 
@@ -260,7 +251,7 @@ async def delete_patient(
         return True
 
 
-async def search_patients(
+async def search_patients(  # noqa: C901
     db: AsyncSession,
     filters: PatientSearchFilters,
 ) -> tuple[list[PatientListItem], int]:
@@ -280,13 +271,9 @@ async def search_patients(
 
         # Application des filtres
         if filters.first_name:
-            query = query.where(
-                Patient.first_name.ilike(f"%{filters.first_name}%")
-            )
+            query = query.where(Patient.first_name.ilike(f"%{filters.first_name}%"))
         if filters.last_name:
-            query = query.where(
-                Patient.last_name.ilike(f"%{filters.last_name}%")
-            )
+            query = query.where(Patient.last_name.ilike(f"%{filters.last_name}%"))
         if filters.national_id:
             query = query.where(Patient.national_id == filters.national_id)
         if filters.email:
@@ -323,9 +310,7 @@ async def search_patients(
         span.add_event("Recherche terminée")
 
         # Convertir en PatientListItem
-        patient_items = [
-            PatientListItem.model_validate(patient) for patient in patients
-        ]
+        patient_items = [PatientListItem.model_validate(patient) for patient in patients]
 
         return patient_items, total
 
@@ -334,7 +319,7 @@ async def verify_patient(
     db: AsyncSession,
     patient_id: int,
     current_user_id: str,
-) -> Optional[Patient]:
+) -> Patient | None:
     """
     Marque un patient comme vérifié.
 

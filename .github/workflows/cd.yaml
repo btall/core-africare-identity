@@ -128,8 +128,8 @@ jobs:
             KEYCLOAK_REALM=secretref:keycloak-realm
             KEYCLOAK_CLIENT_ID=secretref:keycloak-client-id
             KEYCLOAK_CLIENT_SECRET=secretref:keycloak-client-secret
-SQLALCHEMY_DATABASE_URI=secretref:sqlalchemy-database-uri
-AZURE_EVENTHUB_NAMESPACE=${{ vars.AZURE_EVENTHUB_NAMESPACE }}
+            SQLALCHEMY_DATABASE_URI=secretref:sqlalchemy-database-uri
+            AZURE_EVENTHUB_NAMESPACE=${{ vars.AZURE_EVENTHUB_NAMESPACE }}
             AZURE_EVENTHUB_NAME=${{ vars.AZURE_EVENTHUB_NAME }}
             AZURE_EVENTHUB_CONSUMER_GROUP=${{ vars.AZURE_EVENTHUB_CONSUMER_GROUP }}
             AZURE_EVENTHUB_CONSUMER_SOURCES=${{ vars.AZURE_EVENTHUB_CONSUMER_SOURCES }}

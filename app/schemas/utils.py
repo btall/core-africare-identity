@@ -5,6 +5,7 @@ de la validation à travers tous les schémas Pydantic du service.
 """
 
 from typing import Annotated
+
 from pydantic import EmailStr, Field, StringConstraints
 
 # Types de base avec validation
@@ -23,8 +24,8 @@ PhoneNumber = Annotated[
     ),
     Field(
         description="Numéro de téléphone au format international E.164 (ex: +221771234567)",
-        examples=["+221771234567", "+33612345678"]
-    )
+        examples=["+221771234567", "+33612345678"],
+    ),
 ]
 
 # Identifiants
@@ -40,18 +41,14 @@ Title = Annotated[str, Field(min_length=1, max_length=255, description="Titre")]
 AgeYears = Annotated[int, Field(ge=0, le=150, description="Âge en années")]
 
 # Coordonnées GPS (format décimal)
-Latitude = Annotated[
-    float,
-    Field(ge=-90.0, le=90.0, description="Latitude GPS en degrés décimaux")
-]
+Latitude = Annotated[float, Field(ge=-90.0, le=90.0, description="Latitude GPS en degrés décimaux")]
 Longitude = Annotated[
-    float,
-    Field(ge=-180.0, le=180.0, description="Longitude GPS en degrés décimaux")
+    float, Field(ge=-180.0, le=180.0, description="Longitude GPS en degrés décimaux")
 ]
 
 # Identifiant national (Sénégal: Carte d'identité nationale, etc.)
 NationalId = Annotated[
     str,
     StringConstraints(min_length=5, max_length=50, strip_whitespace=True),
-    Field(description="Numéro d'identification nationale")
+    Field(description="Numéro d'identification nationale"),
 ]

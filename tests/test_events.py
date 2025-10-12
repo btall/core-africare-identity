@@ -7,8 +7,7 @@ grâce au pattern Interface.
 Backend testé : redis
 """
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -43,6 +42,7 @@ class TestEventsPublish:
         assert call_args[0][0] == "test.event"  # Subject
         # Payload est JSON avec métadonnées
         import json
+
         event_data = json.loads(call_args[0][1])
         assert event_data["subject"] == "test.event"
         assert event_data["data"]["test_id"] == "123"
@@ -63,6 +63,7 @@ class TestEventsPublish:
         mock_redis.publish.assert_called_once()
         call_args = mock_redis.publish.call_args
         import json
+
         event_data = json.loads(call_args[0][1])
         assert event_data["data"]["test_id"] == "123"
         assert event_data["data"]["test_data"] == "test"
@@ -75,7 +76,7 @@ class TestEventsPublish:
             side_effect=[
                 Exception("Connection error"),
                 Exception("Connection error"),
-                None  # Succès au 3ème essai
+                None,  # Succès au 3ème essai
             ]
         )
 
@@ -97,7 +98,7 @@ class TestEventsPublish:
 
         assert mock_redis.publish.call_count == 2
 
-    @pytest.mark.asyncio
+
 class TestEventsSubscribe:
     """Tests de souscription aux événements."""
 
@@ -115,6 +116,7 @@ class TestEventsSubscribe:
 
         # Assertions
         from app.core.events_redis import handlers
+
         assert "test.event" in handlers
         assert test_handler in handlers["test.event"]
 
@@ -145,13 +147,7 @@ class TestEventsLifespan:
     @patch("app.core.events_redis.start_consuming")
     @patch("app.core.events_redis.stop_consuming")
     @patch("app.core.events_redis.close_redis")
-    async def test_lifespan_startup_shutdown(
-        self,
-        mock_close,
-        mock_stop,
-        mock_start,
-        mock_init
-    ):
+    async def test_lifespan_startup_shutdown(self, mock_close, mock_stop, mock_start, mock_init):
         """Test startup et shutdown du lifespan."""
         # Setup
         mock_init.return_value = AsyncMock()
@@ -171,10 +167,11 @@ class TestEventsLifespan:
         mock_stop.assert_called_once()
         mock_close.assert_called_once()
 
-    @pytest.mark.asyncio
+
 class TestEventsDependencyInjection:
     """Tests de l'injection de dépendance FastAPI."""
 
+    @pytest.mark.asyncio
     async def test_get_publisher(self):
         """Test récupération de la fonction publish via get_publisher."""
         publisher = await get_publisher()
@@ -188,10 +185,7 @@ class TestEventsDependencyInjection:
 class TestEventsIntegration:
     """Tests d'intégration bout-en-bout."""
 
-    @pytest.mark.skipif(
-        "redis" == "eventhub",
-        reason="Nécessite Azure Event Hub réel"
-    )
+    @pytest.mark.skipif("redis" == "eventhub", reason="Nécessite Azure Event Hub réel")
     @patch("app.core.events_redis.redis_client")
     async def test_publish_subscribe_integration(self, mock_redis):
         """Test intégration publish/subscribe (Redis)."""
@@ -211,14 +205,14 @@ class TestEventsIntegration:
         mock_redis.publish.assert_called_once()
         # Handler sera appelé par le consumer Redis (hors scope de ce test)
 
-    def test_backend_info():
-    """Test fonction utilitaire get_backend_info."""
-    from app.core.events import get_backend_info
+    def test_backend_info(self):
+        """Test fonction utilitaire get_backend_info."""
+        from app.core.events import get_backend_info
 
-    info = get_backend_info()
+        info = get_backend_info()
 
-    # Assertions
-    assert "backend" in info
-    assert "version" in info
-    assert "module" in info
-    assert info["backend"] == "redis"
+        # Assertions
+        assert "backend" in info
+        assert "version" in info
+        assert "module" in info
+        assert info["backend"] == "redis"

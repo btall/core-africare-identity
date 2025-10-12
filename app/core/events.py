@@ -26,7 +26,7 @@ Note:
     Ce fichier est généré automatiquement par cookiecutter.
     L'implémentation réelle se trouve dans:
     - app/core/events_redis.py (Redis Pub/Sub)
-    """
+"""
 
 # Import du backend Redis Pub/Sub (Phase 1 MVP)
 from app.core.events_redis import (
@@ -41,10 +41,10 @@ _BACKEND = "redis"
 _BACKEND_VERSION = "Redis Pub/Sub (Phase 1 MVP)"
 
 __all__ = [
-    "publish",
-    "subscribe",
     "get_publisher",
     "lifespan",
+    "publish",
+    "subscribe",
 ]
 
 
@@ -71,4 +71,4 @@ def get_backend_info() -> dict:
         "backend": _BACKEND,
         "version": _BACKEND_VERSION,
         "module": "app.core.events_redis",
-        }
+    }

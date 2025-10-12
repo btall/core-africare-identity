@@ -21,16 +21,14 @@ from fastapi_errors_rfc9457 import (
 AfriCareException = RFC9457Exception
 
 __all__ = [
-    # Base classes
+    "AfriCareException",
+    "ConflictError",
+    "ForbiddenError",
+    "InternalServerError",
+    "NotFoundError",
     "ProblemDetail",
     "RFC9457Exception",
-    "AfriCareException",  # Alias pour rétrocompatibilité
-    # Pre-configured exceptions
-    "ValidationError",
-    "UnauthorizedError",
-    "ForbiddenError",
-    "NotFoundError",
-    "ConflictError",
-    "InternalServerError",
     "ServiceUnavailableError",
+    "UnauthorizedError",
+    "ValidationError",
 ]

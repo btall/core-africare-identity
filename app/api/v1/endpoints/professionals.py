@@ -125,10 +125,9 @@ async def get_professional_by_keycloak_id(
         )
 
     # Vérifier que l'utilisateur accède à son propre profil ou est admin
-    if (
-        professional.keycloak_user_id != current_user["sub"]
-        and "admin" not in current_user.get("realm_access", {}).get("roles", [])
-    ):
+    if professional.keycloak_user_id != current_user["sub"] and "admin" not in current_user.get(
+        "realm_access", {}
+    ).get("roles", []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Accès non autorisé à ce profil professionnel",
@@ -194,10 +193,9 @@ async def update_professional(
         )
 
     # Vérifier les permissions
-    if (
-        existing_professional.keycloak_user_id != current_user["sub"]
-        and "admin" not in current_user.get("realm_access", {}).get("roles", [])
-    ):
+    if existing_professional.keycloak_user_id != current_user[
+        "sub"
+    ] and "admin" not in current_user.get("realm_access", {}).get("roles", []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Accès non autorisé pour modifier ce profil professionnel",
@@ -295,9 +293,7 @@ async def search_professionals(
     )
 
     # Rechercher
-    professionals, total = await professional_service.search_professionals(
-        db=db, filters=filters
-    )
+    professionals, total = await professional_service.search_professionals(db=db, filters=filters)
 
     return ProfessionalListResponse(
         items=professionals,
@@ -373,10 +369,9 @@ async def toggle_availability(
         )
 
     # Vérifier les permissions
-    if (
-        professional.keycloak_user_id != current_user["sub"]
-        and "admin" not in current_user.get("realm_access", {}).get("roles", [])
-    ):
+    if professional.keycloak_user_id != current_user["sub"] and "admin" not in current_user.get(
+        "realm_access", {}
+    ).get("roles", []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Accès non autorisé pour modifier la disponibilité",
