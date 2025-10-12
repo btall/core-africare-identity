@@ -66,13 +66,23 @@ jobs:
       postgres:
         image: postgres:18
         env:
-          POSTGRES_USER: core-africare-identity
-          POSTGRES_PASSWORD: vd8bveedbnBpMcYr_8qB6A
+          POSTGRES_USER: core-africare-identity_test
+          POSTGRES_PASSWORD: test_password
           POSTGRES_DB: core-africare-identity_test
         ports:
           - 5432:5432
         options: >-
           --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -113,8 +123,10 @@ jobs:
           DEBUG: "false"
           # API Configuration
           API_GATEWAY_URL: http://localhost:8000
-          # Database (test)
-          SQLALCHEMY_DATABASE_URI: postgresql+asyncpg://core-africare-identity:vd8bveedbnBpMcYr_8qB6A@localhost:5432/core-africare-identity_test
+          # Database (test) - GitHub Actions services use standard ports
+          SQLALCHEMY_DATABASE_URI: postgresql+asyncpg://core-africare-identity_test:test_password@localhost:5432/core-africare-identity_test
+          # Redis (test)
+          REDIS_URL: redis://localhost:6379/0
           # Keycloak (mock pour tests)
           KEYCLOAK_SERVER_URL: http://localhost:8080
           KEYCLOAK_REALM: test
