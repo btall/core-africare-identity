@@ -54,11 +54,11 @@ services:
   mon-service:
     environment:
       # Format virgules
-      ALLOWED_ORIGINS: "http://localhost:3000,https://app.africare.sn"
-      TRUSTED_HOSTS: "localhost,127.0.0.1,*.africare.sn"
+      ALLOWED_ORIGINS: "http://localhost:3000,https://app.africare.app"
+      TRUSTED_HOSTS: "localhost,127.0.0.1,*.africare.app"
 
       # Format JSON (attention aux guillemets)
-      # ALLOWED_ORIGINS: '["http://localhost:3000","https://app.africare.sn"]'
+      # ALLOWED_ORIGINS: '["http://localhost:3000","https://app.africare.app"]'
 ```
 
 ### Azure Container Apps (Bicep)
@@ -71,11 +71,11 @@ resource containerApp 'Microsoft.App/containerApps@2023-05-01' = {
         env: [
           {
             name: 'ALLOWED_ORIGINS'
-            value: 'https://app.africare.sn,https://admin.africare.sn'
+            value: 'https://app.africare.app,https://admin.africare.app'
           }
           {
             name: 'TRUSTED_HOSTS'
-            value: '*.africare.sn,app.africare.sn'
+            value: '*.africare.app,app.africare.app'
           }
         ]
       }]
@@ -92,8 +92,8 @@ az containerapp update \
   --name mon-app \
   --resource-group mon-rg \
   --set-env-vars \
-    ALLOWED_ORIGINS="https://app.africare.sn,https://admin.africare.sn" \
-    TRUSTED_HOSTS="*.africare.sn,app.africare.sn"
+    ALLOWED_ORIGINS="https://app.africare.app,https://admin.africare.app" \
+    TRUSTED_HOSTS="*.africare.app,app.africare.app"
 ```
 
 ### Kubernetes
@@ -104,8 +104,8 @@ kind: ConfigMap
 metadata:
   name: app-config
 data:
-  ALLOWED_ORIGINS: "https://app.africare.sn,https://admin.africare.sn"
-  TRUSTED_HOSTS: "*.africare.sn,app.africare.sn"
+  ALLOWED_ORIGINS: "https://app.africare.app,https://admin.africare.app"
+  TRUSTED_HOSTS: "*.africare.app,app.africare.app"
 ```
 
 ### Fichier .env
@@ -117,8 +117,8 @@ TRUSTED_HOSTS=localhost,127.0.0.1
 SUPPORTED_LOCALES=fr,en
 
 # Production
-# ALLOWED_ORIGINS=https://app.africare.sn,https://admin.africare.sn
-# TRUSTED_HOSTS=*.africare.sn,app.africare.sn
+# ALLOWED_ORIGINS=https://app.africare.app,https://admin.africare.app
+# TRUSTED_HOSTS=*.africare.app,app.africare.app
 ```
 
 ## Implémentation dans le Code

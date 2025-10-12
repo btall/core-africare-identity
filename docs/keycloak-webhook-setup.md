@@ -208,7 +208,7 @@ public class KeycloakWebhookEventListenerProvider implements EventListenerProvid
 
 4. **Configurer les variables d'environnement:**
    ```bash
-   export WEBHOOK_URL="https://identity.africare.sn/api/v1/webhooks/keycloak"
+   export WEBHOOK_URL="https://identity.africare.app/api/v1/webhooks/keycloak"
    export WEBHOOK_SECRET="your-webhook-secret-here"
    ```
 
@@ -268,7 +268,7 @@ PAYLOAD='{"type":"REGISTER","realmId":"africare","userId":"test-user-123","time"
 SIGNATURE=$(echo -n "${TIMESTAMP}.${PAYLOAD}" | openssl dgst -sha256 -hmac "$SECRET" -hex | awk '{print $2}')
 
 # Envoyer le webhook de test
-curl -X POST https://identity.africare.sn/api/v1/webhooks/keycloak \
+curl -X POST https://identity.africare.app/api/v1/webhooks/keycloak \
   -H "Content-Type: application/json" \
   -H "X-Keycloak-Signature: $SIGNATURE" \
   -H "X-Keycloak-Timestamp: $TIMESTAMP" \
@@ -289,7 +289,7 @@ tail -f /var/log/keycloak/keycloak.log
 
 ```bash
 # Vérifier l'état du webhook endpoint
-curl https://identity.africare.sn/api/v1/webhooks/keycloak/health
+curl https://identity.africare.app/api/v1/webhooks/keycloak/health
 ```
 
 ## 5. Monitoring et Troubleshooting
@@ -321,7 +321,7 @@ kubectl get secret webhook-secret -o yaml  # Service identity
 **Solution**:
 ```bash
 # Tester la connectivité réseau depuis Keycloak
-curl -v https://identity.africare.sn/api/v1/webhooks/keycloak/health
+curl -v https://identity.africare.app/api/v1/webhooks/keycloak/health
 ```
 
 #### 3. Patient Déjà Existant
@@ -381,7 +381,7 @@ Si les webhooks échouent, utiliser l'API REST pour sync manuelle:
 
 ```bash
 # Créer un patient manuellement
-curl -X POST https://identity.africare.sn/api/v1/patients \
+curl -X POST https://identity.africare.app/api/v1/patients \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{

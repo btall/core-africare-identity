@@ -357,7 +357,7 @@ Voir le document détaillé: [docs/keycloak-webhook-setup.md](./keycloak-webhook
 
 ```bash
 # Dans Keycloak (plugin)
-WEBHOOK_URL=https://identity.africare.sn/api/v1/webhooks/keycloak
+WEBHOOK_URL=https://identity.africare.app/api/v1/webhooks/keycloak
 WEBHOOK_SECRET=your-webhook-secret
 
 # Dans core-africare-identity
