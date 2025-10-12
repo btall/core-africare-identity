@@ -9,16 +9,30 @@ from datetime import date, datetime
 
 from opentelemetry import trace
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import publish
+from app.core.retry import async_retry_with_backoff
 from app.models.patient import Patient
 from app.schemas.keycloak import KeycloakWebhookEvent, SyncResult
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
+# Exceptions DB transitoires qui déclenchent un retry
+TRANSIENT_DB_EXCEPTIONS = (
+    OperationalError,  # Connexion DB perdue, timeout, etc.
+    DBAPIError,  # Erreurs DB génériques transitoires
+)
 
+
+@async_retry_with_backoff(
+    max_attempts=3,
+    min_wait_seconds=1,
+    max_wait_seconds=10,
+    exceptions=TRANSIENT_DB_EXCEPTIONS,
+)
 async def sync_user_registration(db: AsyncSession, event: KeycloakWebhookEvent) -> SyncResult:
     """
     Synchronise un événement REGISTER (création d'utilisateur).
@@ -100,6 +114,12 @@ async def sync_user_registration(db: AsyncSession, event: KeycloakWebhookEvent) 
             raise
 
 
+@async_retry_with_backoff(
+    max_attempts=3,
+    min_wait_seconds=1,
+    max_wait_seconds=10,
+    exceptions=TRANSIENT_DB_EXCEPTIONS,
+)
 async def sync_profile_update(db: AsyncSession, event: KeycloakWebhookEvent) -> SyncResult:
     """
     Synchronise un événement UPDATE_PROFILE.
@@ -185,6 +205,12 @@ async def sync_profile_update(db: AsyncSession, event: KeycloakWebhookEvent) -> 
             raise
 
 
+@async_retry_with_backoff(
+    max_attempts=3,
+    min_wait_seconds=1,
+    max_wait_seconds=10,
+    exceptions=TRANSIENT_DB_EXCEPTIONS,
+)
 async def sync_email_update(db: AsyncSession, event: KeycloakWebhookEvent) -> SyncResult:
     """
     Synchronise un événement UPDATE_EMAIL.
