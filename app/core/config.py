@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     KEYCLOAK_CLIENT_ID: str
     KEYCLOAK_CLIENT_SECRET: str
 
+    # Webhook Security
+    WEBHOOK_SECRET: str  # Secret partagé pour vérifier la signature des webhooks Keycloak
+    WEBHOOK_SIGNATURE_TOLERANCE: int = 300  # Tolérance timestamp en secondes (5 min)
+
     # OpenTelemetry
     OTEL_SERVICE_NAME: str
     OTEL_EXPORTER_OTLP_ENDPOINT: str
