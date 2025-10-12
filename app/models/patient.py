@@ -55,8 +55,8 @@ class Patient(Base):
         String(100), nullable=False, comment="Nom de famille du patient"
     )
     date_of_birth: Mapped[date] = mapped_column(Date, nullable=False, comment="Date de naissance")
-    gender: Mapped[Literal["male", "female", "other", "unknown"]] = mapped_column(
-        String(20), nullable=False, comment="Sexe biologique"
+    gender: Mapped[Literal["male", "female"]] = mapped_column(
+        String(10), nullable=False, comment="Sexe biologique"
     )
 
     # Informations de contact

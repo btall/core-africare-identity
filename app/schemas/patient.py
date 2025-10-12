@@ -33,8 +33,8 @@ class PatientBase(BaseModel):
         ..., description="Nom de famille du patient", examples=["Diallo"]
     )
     date_of_birth: date = Field(..., description="Date de naissance", examples=["1990-05-15"])
-    gender: Literal["male", "female", "other", "unknown"] = Field(
-        ..., description="Sexe biologique"
+    gender: Literal["male", "female"] = Field(
+        ..., description="Sexe biologique (reconnaissance légale sénégalaise)"
     )
 
     # Contact
@@ -115,7 +115,7 @@ class PatientUpdate(BaseModel):
     first_name: NonEmptyStr | None = None
     last_name: NonEmptyStr | None = None
     date_of_birth: date | None = None
-    gender: Literal["male", "female", "other", "unknown"] | None = None
+    gender: Literal["male", "female"] | None = None
     email: Email | None = None
     phone: PhoneNumber | None = None
     phone_secondary: PhoneNumber | None = None
@@ -169,7 +169,7 @@ class PatientListItem(BaseModel):
     first_name: str
     last_name: str
     date_of_birth: date
-    gender: Literal["male", "female", "other", "unknown"]
+    gender: Literal["male", "female"]
     phone: str | None
     email: str | None
     is_active: bool
@@ -191,7 +191,7 @@ class PatientSearchFilters(BaseModel):
     national_id: str | None = Field(None, description="Recherche exacte par ID national")
     email: str | None = Field(None, description="Recherche exacte par email")
     phone: str | None = Field(None, description="Recherche exacte par téléphone")
-    gender: Literal["male", "female", "other", "unknown"] | None = None
+    gender: Literal["male", "female"] | None = None
     is_active: bool | None = None
     is_verified: bool | None = None
     region: str | None = Field(None, description="Filtrer par région administrative")
