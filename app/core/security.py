@@ -63,9 +63,25 @@ async def get_token_data(
 
 async def get_current_user(
     token_data: Annotated[dict, Depends(get_token_data)]
-) -> User:
-    """Get current user from verified Keycloak token."""
+) -> dict:
+    """
+    Get current user from verified Keycloak token.
+
+    Returns raw token data dict for convenience in endpoints.
+    For structured User model, use get_current_user_model().
+    """
     with tracer.start_as_current_span("get_current_user") as span:
+        span.set_attribute("auth.user_id", token_data.get("sub"))
+        span.set_attribute("auth.username", token_data.get("preferred_username", "unknown"))
+        logger.info(f"User authenticated: {token_data.get('sub')}")
+        return token_data
+
+
+async def get_current_user_model(
+    token_data: Annotated[dict, Depends(get_token_data)]
+) -> User:
+    """Get current user as Pydantic User model from verified Keycloak token."""
+    with tracer.start_as_current_span("get_current_user_model") as span:
         try:
             user = User(**token_data)
             span.set_attribute("auth.user_id", user.sub)
@@ -119,7 +135,7 @@ def require_roles(*roles: str, require_all: bool = False):
         # Single role check
         @router.get("/patient-only", dependencies=[Depends(require_roles("patient"))])
     """
-    async def role_checker(current_user: User = Depends(get_current_user)) -> User:
+    async def role_checker(current_user: User = Depends(get_current_user_model)) -> User:
         with tracer.start_as_current_span("check_user_roles") as span:
             span.set_attribute("auth.required_roles", ",".join(roles))
             span.set_attribute("auth.require_all", require_all)
