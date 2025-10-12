@@ -114,8 +114,8 @@ class ProfessionalBase(BaseModel):
     languages_spoken: str = Field(
         default="fr",
         max_length=100,
-        description="Langues parlées (codes séparés par virgule: fr,wo,en)",
-        examples=["fr,wo", "fr,en,wo"]
+        description="Langues parlées (codes séparés par virgule: fr,en)",
+        examples=["fr", "fr,en"]
     )
 
     # Disponibilité

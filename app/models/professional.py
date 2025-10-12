@@ -147,7 +147,7 @@ class Professional(Base):
         String(100),
         nullable=False,
         default="fr",
-        comment="Langues parlées (codes séparés par virgule: fr,wo,en)"
+        comment="Langues parlées (codes séparés par virgule: fr,en)"
     )
 
     # Disponibilité et statut

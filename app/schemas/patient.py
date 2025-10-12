@@ -117,9 +117,9 @@ class PatientBase(BaseModel):
     )
 
     # Langue préférée
-    preferred_language: Literal["fr", "wo", "en"] = Field(
+    preferred_language: Literal["fr", "en"] = Field(
         default="fr",
-        description="Langue de communication (fr=Français, wo=Wolof, en=English)"
+        description="Langue de communication (fr=Français, en=English)"
     )
 
     # Notes
@@ -179,7 +179,7 @@ class PatientUpdate(BaseModel):
     longitude: Optional[Longitude] = None
     emergency_contact_name: Optional[str] = Field(None, max_length=200)
     emergency_contact_phone: Optional[PhoneNumber] = None
-    preferred_language: Optional[Literal["fr", "wo", "en"]] = None
+    preferred_language: Optional[Literal["fr", "en"]] = None
     notes: Optional[str] = Field(None, max_length=5000)
     is_active: Optional[bool] = None
 

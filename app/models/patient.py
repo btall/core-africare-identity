@@ -146,11 +146,11 @@ class Patient(Base):
     )
 
     # Langue préférée pour communication
-    preferred_language: Mapped[Literal["fr", "wo", "en"]] = mapped_column(
+    preferred_language: Mapped[Literal["fr", "en"]] = mapped_column(
         String(5),
         nullable=False,
         default="fr",
-        comment="Langue préférée (fr=Français, wo=Wolof, en=English)"
+        comment="Langue préférée (fr=Français, en=English)"
     )
 
     # Statut
