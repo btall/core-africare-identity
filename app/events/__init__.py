@@ -5,9 +5,6 @@ import pkgutil
 from collections.abc import Callable
 from typing import Any
 
-from azure.eventhub import EventData
-from azure.eventhub.aio import PartitionContext
-
 # Registry des handlers d'événements
 event_handlers: dict[str, dict[str, Callable]] = {}
 

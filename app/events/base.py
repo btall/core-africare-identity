@@ -1,40 +1,53 @@
-"""Classe de base pour les handlers d'événements."""
+"""Classe de base pour les handlers d'événements Redis."""
 
 import logging
 from abc import ABC, abstractmethod
-
-from azure.eventhub import EventData
-from azure.eventhub.aio import PartitionContext
+from typing import Any
 
 
 class BaseEventHandler(ABC):
-    """Classe de base pour tous les handlers d'événements."""
+    """Classe de base pour tous les handlers d'événements Redis."""
 
     def __init__(self, event_name: str):
         self.event_name = event_name
         self.logger = logging.getLogger(f"{__name__}.{event_name}")
 
     @abstractmethod
-    async def handle_event(self, partition_context: PartitionContext, event: EventData):
-        """Traite un événement reçu."""
+    async def handle_event(self, payload: dict[str, Any]):
+        """Traite un événement reçu depuis Redis Pub/Sub.
+
+        Args:
+            payload: Dictionnaire contenant les données de l'événement
+        """
         pass
 
-    async def handle_error(self, partition_context: PartitionContext, error: Exception):
-        """Gère les erreurs lors de la réception des événements."""
+    async def handle_error(self, error: Exception):
+        """Gère les erreurs lors de la réception des événements.
+
+        Args:
+            error: L'exception levée pendant le traitement
+        """
         self.logger.error(
-            f"Erreur lors de la réception des événements pour {self.event_name}: {error}"
+            f"Erreur lors de la réception des événements pour {self.event_name}: {error}",
+            exc_info=True,
         )
-        await partition_context.update_checkpoint(None)
 
-    async def on_event(self, partition_context: PartitionContext, event: EventData):
-        """Point d'entrée pour les événements - avec logging et checkpoint."""
+    async def on_event(self, payload: dict[str, Any]):
+        """Point d'entrée pour les événements - avec logging et gestion d'erreur.
+
+        Args:
+            payload: Dictionnaire contenant les données de l'événement
+        """
         try:
-            self.logger.debug(f"Événement reçu sur {self.event_name}: {event}")
-            await self.handle_event(partition_context, event)
-            await partition_context.update_checkpoint(event)
+            self.logger.debug(f"Événement reçu sur {self.event_name}: {payload}")
+            await self.handle_event(payload)
         except Exception as e:
-            await self.handle_error(partition_context, e)
+            await self.handle_error(e)
 
-    async def on_error(self, partition_context: PartitionContext, error: Exception):
-        """Point d'entrée pour les erreurs."""
-        await self.handle_error(partition_context, error)
+    async def on_error(self, error: Exception):
+        """Point d'entrée pour les erreurs.
+
+        Args:
+            error: L'exception à gérer
+        """
+        await self.handle_error(error)

@@ -2,7 +2,6 @@ from opentelemetry.instrumentation import auto_instrumentation
 
 auto_instrumentation.initialize()
 
-import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -21,13 +20,14 @@ from app.api.v1 import api as api_v1
 from app.core.config import settings
 from app.core.database import create_db_and_tables
 from app.core.events import lifespan as events_lifespan
-from app.services import event_service
+
+# from app.services import event_service  # Disabled - using Redis instead of Azure Event Hub
 
 # Configuration du logging standard
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-azure_eventhub_logger = logging.getLogger("azure.eventhub")
-azure_eventhub_logger.setLevel(logging.WARNING)
+# azure_eventhub_logger = logging.getLogger("azure.eventhub")  # Disabled - not using Azure Event Hub
+# azure_eventhub_logger.setLevel(logging.WARNING)
 
 
 @asynccontextmanager
@@ -42,11 +42,12 @@ async def lifespan(app: FastAPI):
     await create_db_and_tables()
 
     # Utiliser le lifespan des événements (redis)
-    async with events_lifespan(app), asyncio.TaskGroup() as tg:
+    async with events_lifespan(app):
         # Démarrer tous les consommateurs d'événements
         try:
-            logger.info("Démarrage du consommateur pour ")
-            tg.create_task(event_service.start_eventhub_consumer_(), name="consumer_")
+            # logger.info("Démarrage du consommateur pour ")
+            # tg.create_task(event_service.start_eventhub_consumer_(), name="consumer_")
+            # Disabled - using Redis Pub/Sub instead of Azure Event Hub
             logger.info("Application startup complete.")
             yield
         finally:
@@ -72,7 +73,7 @@ config_rfc9457 = RFC9457Config(
     base_url="about:blank",  # Auto-detect request domain
     include_trace_id=True,  # Include OpenTelemetry trace_id
     expose_internal_errors=settings.DEBUG,  # Show detailed errors in dev
-    include_error_pages=True,  # Mount error documentation pages
+    include_error_pages=False,  # Mount error documentation pages (disabled - no error-pages dir)
 )
 setup_rfc9457_handlers(app, config=config_rfc9457)
 
