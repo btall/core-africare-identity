@@ -103,6 +103,10 @@ class Settings(BaseSettings):
     # Définir dans .env, ex: TRUSTED_HOSTS='["localhost","127.0.0.1"]'
     TRUSTED_HOSTS: ConfigurableList = ["localhost", "127.0.0.1"]
 
+    # Webhook Configuration
+    WEBHOOK_SECRET: str  # Secret partagé pour vérifier la signature des webhooks Keycloak
+    WEBHOOK_SIGNATURE_TOLERANCE: int = 300  # Tolérance timestamp en secondes (5 min)
+
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
     def assemble_cors_origins(cls, v: ConfigurableList) -> list[str]:

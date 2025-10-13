@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_session
 from app.core.webhook_security import verify_webhook_request
 from app.schemas.keycloak import (
+    KeycloakEventDetails,
     KeycloakWebhookEvent,
     SyncResult,
     WebhookHealthCheck,
@@ -53,6 +54,7 @@ webhook_stats = {
 )
 async def receive_keycloak_webhook(
     request: Request,
+    event: KeycloakEventDetails,
     db: AsyncSession = Depends(get_session),
 ) -> SyncResult:
     """
@@ -81,8 +83,7 @@ async def receive_keycloak_webhook(
             logger.debug("Signature webhook vérifiée")
 
             # 2. Parser le corps de la requête
-            body = await request.json()
-            event = KeycloakWebhookEvent(**body)
+            event = KeycloakWebhookEvent(**event.model_dump(exclude_none=True))
 
             span.set_attribute("event.type", event.type)
             span.set_attribute("event.user_id", event.user_id)
