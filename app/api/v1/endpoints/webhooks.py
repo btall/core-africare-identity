@@ -14,7 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_session
 from app.core.webhook_security import verify_webhook_request
 from app.schemas.keycloak import (
-    KeycloakEventDetails,
     KeycloakWebhookEvent,
     SyncResult,
     WebhookHealthCheck,
@@ -54,7 +53,6 @@ webhook_stats = {
 )
 async def receive_keycloak_webhook(
     request: Request,
-    event: KeycloakEventDetails,
     db: AsyncSession = Depends(get_session),
 ) -> SyncResult:
     """
@@ -83,14 +81,16 @@ async def receive_keycloak_webhook(
             logger.debug("Signature webhook vérifiée")
 
             # 2. Parser le corps de la requête
-            event = KeycloakWebhookEvent(**event.model_dump(exclude_none=True))
+            body = await request.json()
+            logger.info(f"Body: {body}")
+            event = KeycloakWebhookEvent(**body)
 
-            span.set_attribute("event.type", event.type)
+            span.set_attribute("event.type", event.event_type)
             span.set_attribute("event.user_id", event.user_id)
             span.set_attribute("event.realm_id", event.realm_id)
 
             logger.info(
-                f"Événement webhook reçu: type={event.type}, "
+                f"Événement webhook reçu: type={event.event_type}, "
                 f"user_id={event.user_id}, realm={event.realm_id}"
             )
 
@@ -108,7 +108,7 @@ async def receive_keycloak_webhook(
             span.set_attribute("sync.message", result.message)
 
             logger.info(
-                f"Événement traité: type={event.type}, success={result.success}, "
+                f"Événement traité: type={event.event_type}, success={result.success}, "
                 f"message={result.message}"
             )
 
@@ -190,11 +190,11 @@ async def _route_event(db: AsyncSession, event: KeycloakWebhookEvent) -> SyncRes
         "LOGIN": track_user_login,
     }
 
-    handler = handlers.get(event.type)
+    handler = handlers.get(event.event_type)
 
     if not handler:
-        logger.warning(f"Type d'événement non supporté: {event.type}")
-        raise ValueError(f"Unsupported event type: {event.type}")
+        logger.warning(f"Type d'événement non supporté: {event.event_type}")
+        raise ValueError(f"Unsupported event type: {event.event_type}")
 
     # Appeler le handler
     return await handler(db, event)

@@ -48,10 +48,21 @@ async def sync_user_registration(db: AsyncSession, event: KeycloakWebhookEvent) 
         SyncResult avec les détails de la synchronisation
     """
     with tracer.start_as_current_span("sync_user_registration") as span:
-        span.set_attribute("event.type", event.type)
+        span.set_attribute("event.type", event.event_type)
         span.set_attribute("event.user_id", event.user_id)
 
         try:
+            # Validation: l'objet user doit être présent
+            if not event.user:
+                logger.warning(f"Objet user manquant dans l'événement REGISTER: {event.user_id}")
+                return SyncResult(
+                    success=False,
+                    event_type=event.event_type,
+                    user_id=event.user_id,
+                    patient_id=None,
+                    message="User object missing in event",
+                )
+
             # Vérifier si l'utilisateur existe déjà
             existing_patient = await db.execute(
                 select(Patient).where(Patient.keycloak_user_id == event.user_id)
@@ -60,7 +71,7 @@ async def sync_user_registration(db: AsyncSession, event: KeycloakWebhookEvent) 
                 logger.info(f"Utilisateur déjà synchronisé: {event.user_id}")
                 return SyncResult(
                     success=True,
-                    event_type=event.type,
+                    event_type=event.event_type,
                     user_id=event.user_id,
                     patient_id=None,
                     message="User already synchronized",
@@ -91,7 +102,7 @@ async def sync_user_registration(db: AsyncSession, event: KeycloakWebhookEvent) 
 
                 return SyncResult(
                     success=True,
-                    event_type=event.type,
+                    event_type=event.event_type,
                     user_id=event.user_id,
                     patient_id=patient.id,
                     message=f"Patient created: {patient.id}",
@@ -100,7 +111,7 @@ async def sync_user_registration(db: AsyncSession, event: KeycloakWebhookEvent) 
             # TODO: Implémenter création professional
             return SyncResult(
                 success=False,
-                event_type=event.type,
+                event_type=event.event_type,
                 user_id=event.user_id,
                 patient_id=None,
                 message="Professional sync not implemented",
@@ -134,10 +145,23 @@ async def sync_profile_update(db: AsyncSession, event: KeycloakWebhookEvent) -> 
         SyncResult avec les détails de la synchronisation
     """
     with tracer.start_as_current_span("sync_profile_update") as span:
-        span.set_attribute("event.type", event.type)
+        span.set_attribute("event.type", event.event_type)
         span.set_attribute("event.user_id", event.user_id)
 
         try:
+            # Validation: l'objet user doit être présent
+            if not event.user:
+                logger.warning(
+                    f"Objet user manquant dans l'événement UPDATE_PROFILE: {event.user_id}"
+                )
+                return SyncResult(
+                    success=False,
+                    event_type=event.event_type,
+                    user_id=event.user_id,
+                    patient_id=None,
+                    message="User object missing in event",
+                )
+
             # Chercher le patient
             result = await db.execute(
                 select(Patient).where(Patient.keycloak_user_id == event.user_id)
@@ -148,7 +172,7 @@ async def sync_profile_update(db: AsyncSession, event: KeycloakWebhookEvent) -> 
                 logger.warning(f"Patient non trouvé pour user_id: {event.user_id}")
                 return SyncResult(
                     success=False,
-                    event_type=event.type,
+                    event_type=event.event_type,
                     user_id=event.user_id,
                     patient_id=None,
                     message="Patient not found",
@@ -156,16 +180,16 @@ async def sync_profile_update(db: AsyncSession, event: KeycloakWebhookEvent) -> 
 
             # Mettre à jour les champs
             updated_fields = []
-            if event.details.first_name and event.details.first_name != patient.first_name:
-                patient.first_name = event.details.first_name
+            if event.user.first_name and event.user.first_name != patient.first_name:
+                patient.first_name = event.user.first_name
                 updated_fields.append("first_name")
 
-            if event.details.last_name and event.details.last_name != patient.last_name:
-                patient.last_name = event.details.last_name
+            if event.user.last_name and event.user.last_name != patient.last_name:
+                patient.last_name = event.user.last_name
                 updated_fields.append("last_name")
 
-            if event.details.phone and event.details.phone != patient.phone:
-                patient.phone = event.details.phone
+            if event.user.phone and event.user.phone != patient.phone:
+                patient.phone = event.user.phone
                 updated_fields.append("phone")
 
             if updated_fields:
@@ -191,7 +215,7 @@ async def sync_profile_update(db: AsyncSession, event: KeycloakWebhookEvent) -> 
 
             return SyncResult(
                 success=True,
-                event_type=event.type,
+                event_type=event.event_type,
                 user_id=event.user_id,
                 patient_id=patient.id,
                 message=f"Updated fields: {updated_fields}" if updated_fields else "No changes",
@@ -225,10 +249,23 @@ async def sync_email_update(db: AsyncSession, event: KeycloakWebhookEvent) -> Sy
         SyncResult avec les détails de la synchronisation
     """
     with tracer.start_as_current_span("sync_email_update") as span:
-        span.set_attribute("event.type", event.type)
+        span.set_attribute("event.type", event.event_type)
         span.set_attribute("event.user_id", event.user_id)
 
         try:
+            # Validation: l'objet user doit être présent
+            if not event.user:
+                logger.warning(
+                    f"Objet user manquant dans l'événement UPDATE_EMAIL: {event.user_id}"
+                )
+                return SyncResult(
+                    success=False,
+                    event_type=event.event_type,
+                    user_id=event.user_id,
+                    patient_id=None,
+                    message="User object missing in event",
+                )
+
             # Chercher le patient
             result = await db.execute(
                 select(Patient).where(Patient.keycloak_user_id == event.user_id)
@@ -239,18 +276,18 @@ async def sync_email_update(db: AsyncSession, event: KeycloakWebhookEvent) -> Sy
                 logger.warning(f"Patient non trouvé pour user_id: {event.user_id}")
                 return SyncResult(
                     success=False,
-                    event_type=event.type,
+                    event_type=event.event_type,
                     user_id=event.user_id,
                     patient_id=None,
                     message="Patient not found",
                 )
 
-            new_email = event.details.email
+            new_email = event.user.email
             if not new_email:
                 logger.warning("Email manquant dans l'événement UPDATE_EMAIL")
                 return SyncResult(
                     success=False,
-                    event_type=event.type,
+                    event_type=event.event_type,
                     user_id=event.user_id,
                     patient_id=patient.id,
                     message="Email missing in event",
@@ -258,7 +295,7 @@ async def sync_email_update(db: AsyncSession, event: KeycloakWebhookEvent) -> Sy
 
             old_email = patient.email
             patient.email = new_email
-            patient.is_verified = event.details.email_verified or False
+            patient.is_verified = event.user.email_verified or False
             patient.updated_at = datetime.now()
 
             await db.commit()
@@ -287,7 +324,7 @@ async def sync_email_update(db: AsyncSession, event: KeycloakWebhookEvent) -> Sy
 
             return SyncResult(
                 success=True,
-                event_type=event.type,
+                event_type=event.event_type,
                 user_id=event.user_id,
                 patient_id=patient.id,
                 message=f"Email updated: {old_email} -> {new_email}",
@@ -315,7 +352,7 @@ async def track_user_login(db: AsyncSession, event: KeycloakWebhookEvent) -> Syn
         SyncResult avec les détails du tracking
     """
     with tracer.start_as_current_span("track_user_login") as span:
-        span.set_attribute("event.type", event.type)
+        span.set_attribute("event.type", event.event_type)
         span.set_attribute("event.user_id", event.user_id)
         span.set_attribute("ip_address", event.ip_address or "unknown")
 
@@ -338,7 +375,7 @@ async def track_user_login(db: AsyncSession, event: KeycloakWebhookEvent) -> Syn
 
             return SyncResult(
                 success=True,
-                event_type=event.type,
+                event_type=event.event_type,
                 user_id=event.user_id,
                 patient_id=None,
                 message="Login tracked",
@@ -365,40 +402,43 @@ async def _create_patient_from_event(db: AsyncSession, event: KeycloakWebhookEve
     Raises:
         ValueError: Si données requises manquantes
     """
-    details = event.details
+    if not event.user:
+        raise ValueError("Objet user manquant dans l'événement")
+
+    user = event.user
 
     # Validation des champs requis
-    if not details.first_name or not details.last_name:
+    if not user.first_name or not user.last_name:
         raise ValueError("first_name et last_name sont requis")
 
-    if not details.date_of_birth:
+    if not user.date_of_birth:
         raise ValueError("date_of_birth est requis")
 
-    if not details.gender:
+    if not user.gender:
         raise ValueError("gender est requis")
 
     # Parser la date de naissance
     try:
-        dob = date.fromisoformat(details.date_of_birth)
+        dob = date.fromisoformat(user.date_of_birth)
     except (ValueError, TypeError) as e:
-        raise ValueError(f"Format date_of_birth invalide: {details.date_of_birth}") from e
+        raise ValueError(f"Format date_of_birth invalide: {user.date_of_birth}") from e
 
     # Créer le patient
     patient = Patient(
         keycloak_user_id=event.user_id,
-        first_name=details.first_name,
-        last_name=details.last_name,
+        first_name=user.first_name,
+        last_name=user.last_name,
         date_of_birth=dob,
-        gender=details.gender,
-        email=details.email,
-        phone=details.phone,
-        national_id=details.national_id,
-        country=details.country or "Sénégal",
-        region=details.region,
-        city=details.city,
-        preferred_language=details.preferred_language or "fr",
+        gender=user.gender,
+        email=user.email,
+        phone=user.phone,
+        national_id=user.national_id,
+        country=user.country or "Sénégal",
+        region=user.region,
+        city=user.city,
+        preferred_language=user.preferred_language or "fr",
         is_active=True,
-        is_verified=details.email_verified or False,
+        is_verified=user.email_verified or False,
     )
 
     db.add(patient)

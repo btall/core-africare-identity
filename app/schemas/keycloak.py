@@ -11,22 +11,56 @@ Types d'événements supportés:
 """
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
 
-class KeycloakEventDetails(BaseModel):
-    """Détails spécifiques à chaque type d'événement Keycloak."""
+class KeycloakUserAttributes(BaseModel):
+    """Attributs personnalisés de l'utilisateur Keycloak."""
 
-    # Champs communs potentiellement présents
-    username: str | None = None
-    email: str | None = None
-    email_verified: bool | None = None
-    first_name: str | None = None
-    last_name: str | None = None
+    last_name: list[str] | None = Field(None, alias="lastName")
+    first_name: list[str] | None = Field(None, alias="firstName")
+    email: list[str] | None = None
+    username: list[str] | None = None
+    phone: list[str] | None = None
+    date_of_birth: list[str] | None = None
+    gender: list[str] | None = None
+    national_id: list[str] | None = None
+    country: list[str] | None = None
+    region: list[str] | None = None
+    city: list[str] | None = None
+    preferred_language: list[str] | None = None
 
-    # Attributs personnalisés AfriCare
+    model_config = {
+        "extra": "allow",  # Permet les attributs non définis
+        "populate_by_name": True,  # Accepte snake_case et camelCase
+    }
+
+
+class KeycloakUser(BaseModel):
+    """Représentation complète d'un utilisateur Keycloak (fusion de User et EventDetails)."""
+
+    # Champs principaux de l'utilisateur
+    id: str | None = Field(None, description="UUID de l'utilisateur Keycloak")
+    username: str | None = Field(None, description="Nom d'utilisateur")
+    email: str | None = Field(None, description="Adresse email")
+    email_verified: bool = Field(
+        default=False, alias="emailVerified", description="Email vérifié ou non"
+    )
+    first_name: str | None = Field(None, alias="firstName", description="Prénom")
+    last_name: str | None = Field(None, alias="lastName", description="Nom de famille")
+    enabled: bool = Field(default=True, description="Compte activé ou non")
+    created_timestamp: int | None = Field(
+        None, alias="createdTimestamp", description="Timestamp de création (ms depuis epoch)"
+    )
+
+    # Attributs personnalisés (peuvent venir de l'objet attributes ou directement de details)
+    attributes: KeycloakUserAttributes | None = Field(
+        None, description="Attributs personnalisés structurés"
+    )
+
+    # Attributs AfriCare (pour compatibilité avec details)
     phone: str | None = None
     date_of_birth: str | None = None
     gender: str | None = None
@@ -36,17 +70,17 @@ class KeycloakEventDetails(BaseModel):
     city: str | None = None
     preferred_language: str | None = None
 
-    # Autres détails non structurés
-    custom_attributes: dict[str, Any] = Field(default_factory=dict)
-
-    model_config = {"extra": "allow"}  # Permet les champs non définis
+    model_config = {
+        "extra": "allow",  # Permet les champs non définis
+        "populate_by_name": True,  # Accepte snake_case et camelCase
+    }
 
 
 class KeycloakWebhookEvent(BaseModel):
     """Schéma principal pour un événement webhook Keycloak."""
 
-    type: Literal["REGISTER", "UPDATE_PROFILE", "UPDATE_EMAIL", "LOGIN"] = Field(
-        ..., description="Type d'événement Keycloak"
+    event_type: Literal["REGISTER", "UPDATE_PROFILE", "UPDATE_EMAIL", "LOGIN"] = Field(
+        ..., alias="eventType", description="Type d'événement Keycloak"
     )
     realm_id: str = Field(..., alias="realmId", description="Identifiant du realm Keycloak")
     client_id: str | None = Field(None, alias="clientId", description="Client Keycloak émetteur")
@@ -58,19 +92,22 @@ class KeycloakWebhookEvent(BaseModel):
     )
     session_id: str | None = Field(None, alias="sessionId", description="Session ID Keycloak")
 
-    # Détails de l'événement
-    details: KeycloakEventDetails = Field(
-        default_factory=KeycloakEventDetails, description="Détails spécifiques de l'événement"
+    # Objet utilisateur complet (pour événements REGISTER, UPDATE_PROFILE, etc.)
+    # Contient toutes les données utilisateur (remplace l'ancien champ 'details')
+    user: KeycloakUser | None = Field(
+        None, description="Données complètes de l'utilisateur Keycloak"
     )
 
     # Timestamp (millisecondes depuis epoch)
-    time: int = Field(..., description="Timestamp de l'événement (ms depuis epoch)")
+    event_time: int = Field(
+        ..., alias="eventTime", description="Timestamp de l'événement (ms depuis epoch)"
+    )
 
     model_config = {"populate_by_name": True}  # Accepte à la fois snake_case et camelCase
 
-    @field_validator("time")
+    @field_validator("event_time")
     @classmethod
-    def validate_time(cls, v: int) -> int:
+    def validate_event_time(cls, v: int) -> int:
         """Valide que le timestamp est raisonnable (dernières 24h ou futur proche)."""
         now_ms = int(datetime.now().timestamp() * 1000)
         day_ms = 24 * 60 * 60 * 1000
@@ -84,7 +121,7 @@ class KeycloakWebhookEvent(BaseModel):
     @property
     def timestamp_datetime(self) -> datetime:
         """Convertit le timestamp (ms) en datetime Python."""
-        return datetime.fromtimestamp(self.time / 1000)
+        return datetime.fromtimestamp(self.event_time / 1000)
 
 
 class WebhookSignature(BaseModel):
