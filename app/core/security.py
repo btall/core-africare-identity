@@ -14,12 +14,11 @@ LoggingInstrumentor().instrument(set_logging_format=True)
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
-# Keycloak client configuration
+# Keycloak client configuration (bearer-only mode - no client_secret needed)
 keycloak_openid = KeycloakOpenID(
     server_url=settings.KEYCLOAK_SERVER_URL,
     client_id=settings.KEYCLOAK_CLIENT_ID,
     realm_name=settings.KEYCLOAK_REALM,
-    client_secret_key=settings.KEYCLOAK_CLIENT_SECRET,
 )
 
 # Security scheme for Bearer token
@@ -40,8 +39,8 @@ async def verify_token(token: str) -> dict:
     """Verify JWT token with Keycloak."""
     with tracer.start_as_current_span("verify_keycloak_token") as span:
         try:
-            # Decode and verify token with Keycloak
-            token_info = keycloak_openid.decode_token(token)
+            # Decode and verify token with Keycloak (validate=True ensures full verification)
+            token_info = keycloak_openid.decode_token(token, validate=True)
             span.set_attribute("auth.user_id", token_info.get("sub"))
             return token_info
         except Exception as e:

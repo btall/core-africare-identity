@@ -71,11 +71,11 @@ class Settings(BaseSettings):
     # JWT (si nécessaire pour l'authentification)
     API_GATEWAY_URL: AnyHttpUrl = "http://api-gateway-service:8000"
 
-    # Keycloak Authentication
+    # Keycloak Authentication (bearer-only mode - client_secret not needed)
     KEYCLOAK_SERVER_URL: str
     KEYCLOAK_REALM: str
     KEYCLOAK_CLIENT_ID: str
-    KEYCLOAK_CLIENT_SECRET: str
+    # KEYCLOAK_CLIENT_SECRET: str  # Not needed for bearer-only clients
 
     # Webhook Security
     WEBHOOK_SECRET: str  # Secret partagé pour vérifier la signature des webhooks Keycloak
