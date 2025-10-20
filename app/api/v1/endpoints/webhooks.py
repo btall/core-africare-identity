@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Body, HTTPException, Request, status
+from fastapi_errors_rfc9457 import create_responses
 from opentelemetry import trace
 from pydantic import BaseModel
 
@@ -63,9 +64,7 @@ class WebhookAcceptedResponse(BaseModel):
     description="Reçoit, valide et persiste les événements Keycloak pour traitement asynchrone",
     responses={
         202: {"description": "Événement accepté et persisté dans Redis Streams"},
-        400: {"description": "Événement invalide ou headers manquants"},
-        401: {"description": "Signature webhook invalide"},
-        500: {"description": "Erreur lors de la persistence de l'événement"},
+        **create_responses(),
     },
 )
 async def receive_keycloak_webhook(

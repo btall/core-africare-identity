@@ -31,8 +31,6 @@ from app.services.webhook_processor import route_webhook_event
 
 # from app.services import event_service  # Disabled - using Redis instead of Azure Event Hub
 
-# Configuration du logging standard
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 # azure_eventhub_logger = logging.getLogger("azure.eventhub")  # Disabled - not using Azure Event Hub
 # azure_eventhub_logger.setLevel(logging.WARNING)

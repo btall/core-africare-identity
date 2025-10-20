@@ -95,38 +95,90 @@ webhook_processing_duration = meter.create_histogram(
 )
 
 
-async def _get_consumer_lag() -> int:
-    """Callback pour mesurer le consumer lag (messages pending)."""
+def _get_consumer_lag_sync(options) -> list:
+    """
+    Callback synchrone pour mesurer le consumer lag (messages pending).
+
+    Note: OpenTelemetry nécessite des callbacks synchrones pour les métriques observables.
+    Comme Redis async ne peut pas être utilisé dans un contexte synchrone,
+    nous retournons une liste vide. Les métriques réelles sont mises à jour
+    lors du traitement des messages.
+    """
+    # Les métriques de lag sont maintenant suivies via des compteurs
+    # lors du traitement réel des messages
+    return []
+
+
+def _get_dlq_length_sync(options) -> list:
+    """
+    Callback synchrone pour mesurer la longueur de la DLQ.
+
+    Note: OpenTelemetry nécessite des callbacks synchrones pour les métriques observables.
+    Les métriques réelles sont mises à jour lors du déplacement vers la DLQ.
+    """
+    # Les métriques DLQ sont suivies via webhook_events_dlq counter
+    return []
+
+
+# Variables globales pour stocker les dernières valeurs des métriques
+_last_consumer_lag = 0
+_last_dlq_length = 0
+
+
+async def _update_consumer_lag():
+    """Met à jour la métrique de consumer lag de manière asynchrone."""
+    global _last_consumer_lag
     if not webhook_redis_client:
+        _last_consumer_lag = 0
         return 0
     try:
         pending = await webhook_redis_client.xpending(WEBHOOK_STREAM_NAME, WEBHOOK_CONSUMER_GROUP)
-        return pending.get("pending", 0) if pending else 0
+        _last_consumer_lag = pending.get("pending", 0) if pending else 0
+        return _last_consumer_lag
     except Exception:
+        _last_consumer_lag = 0
         return 0
 
 
-async def _get_dlq_length() -> int:
-    """Callback pour mesurer la longueur de la DLQ."""
+async def _update_dlq_length():
+    """Met à jour la métrique de longueur de la DLQ de manière asynchrone."""
+    global _last_dlq_length
     if not webhook_redis_client:
+        _last_dlq_length = 0
         return 0
     try:
-        return await webhook_redis_client.xlen(f"{WEBHOOK_STREAM_NAME}:dlq")
+        _last_dlq_length = await webhook_redis_client.xlen(f"{WEBHOOK_STREAM_NAME}:dlq")
+        return _last_dlq_length
     except Exception:
+        _last_dlq_length = 0
         return 0
 
 
-# Gauges observables (callbacks async)
-meter.create_observable_gauge(
+def _get_consumer_lag_callback(options) -> list:
+    """Callback synchrone qui retourne la dernière valeur de consumer lag."""
+    from opentelemetry.metrics import Observation
+
+    return [Observation(_last_consumer_lag)]
+
+
+def _get_dlq_length_callback(options) -> list:
+    """Callback synchrone qui retourne la dernière valeur de DLQ length."""
+    from opentelemetry.metrics import Observation
+
+    return [Observation(_last_dlq_length)]
+
+
+# Gauges observables avec callbacks synchrones
+webhook_consumer_lag_gauge = meter.create_observable_gauge(
     "webhook.consumer.lag",
-    callbacks=[lambda options: _get_consumer_lag()],
+    callbacks=[_get_consumer_lag_callback],
     description="Nombre de messages pending (non-ACK) dans Redis Streams",
     unit="messages",
 )
 
-meter.create_observable_gauge(
+webhook_dlq_length_gauge = meter.create_observable_gauge(
     "webhook.dlq.length",
-    callbacks=[lambda options: _get_dlq_length()],
+    callbacks=[_get_dlq_length_callback],
     description="Nombre de messages dans la Dead Letter Queue",
     unit="messages",
 )
@@ -217,6 +269,14 @@ async def add_webhook_event(event: KeycloakWebhookEvent) -> str:
         >>> print(f"Event persisted: {message_id}")
         Event persisted: 1234567890123-0
     """
+    # Capturer le contexte de trace ACTUEL (du webhook endpoint)
+    current_span = trace.get_current_span()
+    span_context = current_span.get_span_context()
+
+    # Extraire trace_id et span_id pour propagation
+    trace_id = format(span_context.trace_id, "032x") if span_context.is_valid else None
+    span_id = format(span_context.span_id, "016x") if span_context.is_valid else None
+
     span_attributes = {
         "messaging.system": "redis-streams",
         "messaging.destination": WEBHOOK_STREAM_NAME,
@@ -228,15 +288,18 @@ async def add_webhook_event(event: KeycloakWebhookEvent) -> str:
         "add_webhook_event", kind=trace.SpanKind.PRODUCER, attributes=span_attributes
     ) as span:
         try:
-            # Sérialiser l'événement
+            # Sérialiser l'événement avec le contexte de trace
             event_data = {
                 "event_type": event.event_type,
                 "user_id": event.user_id,
                 "realm_id": event.realm_id,
-                "timestamp": event.timestamp,
+                "event_time": str(event.event_time),  # Utiliser event_time au lieu de timestamp
                 "payload": event.model_dump_json(exclude_none=True),
                 "added_at": datetime.now(UTC).isoformat(),
                 "delivery_attempts": "0",  # Compteur de tentatives
+                # Propagation du contexte de trace pour corrélation
+                "trace_id": trace_id,
+                "parent_span_id": span_id,
             }
 
             # XADD: Ajoute au stream avec ID auto-généré
@@ -326,6 +389,10 @@ async def consume_webhook_events():
                 # 2. Récupérer les messages pending (retries)
                 await _reclaim_pending_messages()
 
+                # 3. Mettre à jour les métriques observables
+                await _update_consumer_lag()
+                await _update_dlq_length()
+
             except asyncio.CancelledError:
                 logger.info("Consommation webhook annulée (shutdown)")
                 raise
@@ -347,16 +414,29 @@ async def _process_webhook_message(message_id: str, message_data: dict):
         message_id: ID du message Redis (format: timestamp-sequence)
         message_data: Données du message (event sérialisé)
     """
+    # Récupérer le contexte de trace propagé
+    original_trace_id = message_data.get("trace_id")
+    parent_span_id = message_data.get("parent_span_id")
+
     span_attributes = {
         "messaging.system": "redis-streams",
         "messaging.destination": WEBHOOK_STREAM_NAME,
         "messaging.message.id": message_id,
         "event.type": message_data.get("event_type"),
+        # Lier au trace original du webhook
+        "original.trace_id": original_trace_id,
+        "original.parent_span_id": parent_span_id,
     }
 
     with tracer.start_as_current_span(
         "process_webhook_message", kind=trace.SpanKind.CONSUMER, attributes=span_attributes
     ) as span:
+        # Log avec le trace_id original pour corrélation
+        if original_trace_id:
+            logger.info(
+                f"Processing webhook from original trace_id={original_trace_id}, "
+                f"message_id={message_id}, type={message_data.get('event_type')}"
+            )
         # Métrique OpenTelemetry: événement consommé
         event_type = message_data.get("event_type", "unknown")
         webhook_events_consumed.add(1, {"event_type": event_type})
@@ -524,7 +604,8 @@ async def _move_to_dead_letter(message_id: str, message_data: dict):
 
         logger.error(
             f"Message déplacé vers DLQ: original_id={message_id}, "
-            f"dlq_id={dlq_id}, type={message_data.get('event_type')}"
+            f"dlq_id={dlq_id}, type={message_data.get('event_type')}, "
+            f"original_trace_id={message_data.get('trace_id')}"
         )
 
     except Exception as e:

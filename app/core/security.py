@@ -5,12 +5,10 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from keycloak import KeycloakOpenID
 from opentelemetry import trace
-from opentelemetry.instrumentation.logging import LoggingInstrumentor
 from pydantic import BaseModel
 
 from app.core.config import settings
 
-LoggingInstrumentor().instrument(set_logging_format=True)
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
