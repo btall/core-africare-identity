@@ -284,11 +284,34 @@ async def add_webhook_event(event: KeycloakWebhookEvent) -> str:
         "event.user_id": event.user_id,
     }
 
+    # Enrichir les attributs du span avec les informations utilisateur (si disponibles)
+    if event.user:
+        span_attributes.update(
+            {
+                "user.keycloak_id": event.user_id,
+                "user.email": event.user.email or "",
+                "user.first_name": event.user.first_name or "",
+                "user.last_name": event.user.last_name or "",
+                "user.username": event.user.username or "",
+            }
+        )
+
     with tracer.start_as_current_span(
         "add_webhook_event", kind=trace.SpanKind.PRODUCER, attributes=span_attributes
     ) as span:
         try:
-            # Sérialiser l'événement avec le contexte de trace
+            # Extraire les informations utilisateur pour le stockage
+            user_info = {}
+            if event.user:
+                user_info = {
+                    "user_email": event.user.email or "",
+                    "user_first_name": event.user.first_name or "",
+                    "user_last_name": event.user.last_name or "",
+                    "user_username": event.user.username or "",
+                    "user_phone": event.user.phone or "",
+                }
+
+            # Sérialiser l'événement avec le contexte de trace et les infos utilisateur
             event_data = {
                 "event_type": event.event_type,
                 "user_id": event.user_id,
@@ -300,6 +323,8 @@ async def add_webhook_event(event: KeycloakWebhookEvent) -> str:
                 # Propagation du contexte de trace pour corrélation
                 "trace_id": trace_id,
                 "parent_span_id": span_id,
+                # Informations utilisateur pour faciliter le debug
+                **user_info,
             }
 
             # XADD: Ajoute au stream avec ID auto-généré
@@ -426,6 +451,12 @@ async def _process_webhook_message(message_id: str, message_data: dict):
         # Lier au trace original du webhook
         "original.trace_id": original_trace_id,
         "original.parent_span_id": parent_span_id,
+        # Informations utilisateur depuis le message stocké
+        "user.keycloak_id": message_data.get("user_id", ""),
+        "user.email": message_data.get("user_email", ""),
+        "user.first_name": message_data.get("user_first_name", ""),
+        "user.last_name": message_data.get("user_last_name", ""),
+        "user.username": message_data.get("user_username", ""),
     }
 
     with tracer.start_as_current_span(
@@ -602,9 +633,18 @@ async def _move_to_dead_letter(message_id: str, message_data: dict):
         event_type = message_data.get("event_type", "unknown")
         webhook_events_dlq.add(1, {"event_type": event_type})
 
+        # Log enrichi avec les informations utilisateur pour faciliter le debug
+        user_info = ""
+        if message_data.get("user_email"):
+            user_info = (
+                f", user={message_data.get('user_email', '')} "
+                f"({message_data.get('user_first_name', '')} {message_data.get('user_last_name', '')})"
+            )
+
         logger.error(
             f"Message déplacé vers DLQ: original_id={message_id}, "
             f"dlq_id={dlq_id}, type={message_data.get('event_type')}, "
+            f"user_id={message_data.get('user_id')}{user_info}, "
             f"original_trace_id={message_data.get('trace_id')}"
         )
 

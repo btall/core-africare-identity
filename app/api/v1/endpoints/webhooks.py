@@ -103,9 +103,28 @@ async def receive_keycloak_webhook(
             await verify_webhook_request(request)
             logger.debug("Signature webhook vérifiée")
 
+            # Enrichir le span avec les informations de base
             span.set_attribute("event.type", event.event_type)
             span.set_attribute("event.user_id", event.user_id)
             span.set_attribute("event.realm_id", event.realm_id)
+
+            # Enrichir le span avec les informations utilisateur détaillées (si disponibles)
+            if event.user:
+                span.set_attribute("user.keycloak_id", event.user_id)  # Toujours l'ID Keycloak
+                span.set_attribute("user.email", event.user.email or "")
+                span.set_attribute("user.first_name", event.user.first_name or "")
+                span.set_attribute("user.last_name", event.user.last_name or "")
+                span.set_attribute("user.username", event.user.username or "")
+                span.set_attribute("user.email_verified", event.user.email_verified)
+                span.set_attribute("user.enabled", event.user.enabled)
+
+                # Informations supplémentaires si disponibles
+                if event.user.phone:
+                    span.set_attribute("user.phone", event.user.phone)
+                if event.user.country:
+                    span.set_attribute("user.country", event.user.country)
+                if event.user.preferred_language:
+                    span.set_attribute("user.preferred_language", event.user.preferred_language)
 
             logger.info(
                 f"Webhook reçu: type={event.event_type}, "
