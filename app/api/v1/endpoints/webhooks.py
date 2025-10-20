@@ -152,7 +152,7 @@ async def receive_keycloak_webhook(
                 message_id=message_id,
                 event_type=event.event_type,
                 user_id=event.user_id,
-                timestamp=event.timestamp,
+                timestamp=event.timestamp_datetime.isoformat(),
                 message="Event accepted and queued for processing",
             )
 

@@ -25,9 +25,12 @@ logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
 # Client admin Keycloak pour récupérer les rôles utilisateur
+# Note: Authentification via client credentials (service account)
 keycloak_admin = KeycloakAdmin(
     server_url=settings.KEYCLOAK_SERVER_URL,
     realm_name=settings.KEYCLOAK_REALM,
+    client_id=settings.KEYCLOAK_CLIENT_ID,
+    client_secret_key=getattr(settings, "KEYCLOAK_CLIENT_SECRET", None),
     verify=True,
 )
 
@@ -541,7 +544,35 @@ async def sync_user_deletion(
 
         try:
             # Récupérer les rôles de l'utilisateur depuis Keycloak
+            # Fallback: si erreur, on cherche quand même dans les tables locales
             user_roles = await get_user_roles_from_keycloak(event.user_id)
+
+            # Si pas de rôles récupérés, fallback sur détection via existence des profils
+            if not user_roles:
+                logger.warning(
+                    f"Impossible de récupérer les rôles Keycloak pour {event.user_id}, "
+                    "fallback sur détection via tables locales"
+                )
+                # On va tenter de détecter les rôles via l'existence des profils
+                has_professional_role = False
+                has_patient_role = False
+
+                # Vérifier si profil professional existe
+                result_prof_check = await db.execute(
+                    select(Professional).where(Professional.keycloak_user_id == event.user_id)
+                )
+                if result_prof_check.scalar_one_or_none():
+                    has_professional_role = True
+                    user_roles.append("professional")
+
+                # Vérifier si profil patient existe
+                result_patient_check = await db.execute(
+                    select(Patient).where(Patient.keycloak_user_id == event.user_id)
+                )
+                if result_patient_check.scalar_one_or_none():
+                    has_patient_role = True
+                    user_roles.append("patient")
+
             span.set_attribute("user.roles", ",".join(user_roles))
 
             has_professional_role = "professional" in user_roles
