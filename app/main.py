@@ -117,7 +117,7 @@ if settings.ENVIRONMENT != "development":
     )
 
 # Include API v1 (current version)
-app.include_router(api_v1.router, prefix=settings.get_api_prefix("v1"), tags=["v1"])
+app.include_router(api_v1.router, prefix=settings.get_api_prefix("v1"))
 
 # Future versions: uncomment when ready
 # app.include_router(
