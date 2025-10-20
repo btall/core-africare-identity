@@ -5,12 +5,10 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from keycloak import KeycloakOpenID
 from opentelemetry import trace
-from opentelemetry.instrumentation.logging import LoggingInstrumentor
 from pydantic import BaseModel
 
 from app.core.config import settings
 
-LoggingInstrumentor().instrument(set_logging_format=True)
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
@@ -103,10 +101,20 @@ async def verify_token(token: str) -> dict:
                     headers={"WWW-Authenticate": "Bearer"},
                 )
 
+            # Enrichir le span avec toutes les informations utilisateur disponibles
             span.set_attribute("auth.user_id", token_info.get("sub"))
             span.set_attribute("auth.iss", iss)
             span.set_attribute("auth.azp", azp)
             span.set_attribute("auth.aud", str(aud))
+
+            # Ajouter les informations personnelles de l'utilisateur
+            span.set_attribute("user.keycloak_id", token_info.get("sub", ""))
+            span.set_attribute("user.email", token_info.get("email", ""))
+            span.set_attribute("user.email_verified", token_info.get("email_verified", False))
+            span.set_attribute("user.username", token_info.get("preferred_username", ""))
+            span.set_attribute("user.given_name", token_info.get("given_name", ""))
+            span.set_attribute("user.family_name", token_info.get("family_name", ""))
+            span.set_attribute("user.name", token_info.get("name", ""))  # Nom complet
 
             logger.debug(
                 f"Token validated successfully - iss: {iss}, azp: {azp}, aud: {aud}, user: {token_info.get('sub')}"
@@ -138,9 +146,18 @@ async def get_current_user(token_data: Annotated[dict, Depends(get_token_data)])
     For structured User model, use get_current_user_model().
     """
     with tracer.start_as_current_span("get_current_user") as span:
-        span.set_attribute("auth.user_id", token_data.get("sub"))
-        span.set_attribute("auth.username", token_data.get("preferred_username", "unknown"))
-        logger.info(f"User authenticated: {token_data.get('sub')}")
+        # Enrichir le span avec toutes les informations utilisateur
+        span.set_attribute("user.keycloak_id", token_data.get("sub", ""))
+        span.set_attribute("user.email", token_data.get("email", ""))
+        span.set_attribute("user.username", token_data.get("preferred_username", ""))
+        span.set_attribute("user.given_name", token_data.get("given_name", ""))
+        span.set_attribute("user.family_name", token_data.get("family_name", ""))
+        span.set_attribute("user.name", token_data.get("name", ""))
+
+        logger.info(
+            f"User authenticated: {token_data.get('sub')} - "
+            f"{token_data.get('name', token_data.get('preferred_username', 'Unknown'))}"
+        )
         return token_data
 
 
@@ -149,9 +166,18 @@ async def get_current_user_model(token_data: Annotated[dict, Depends(get_token_d
     with tracer.start_as_current_span("get_current_user_model") as span:
         try:
             user = User(**token_data)
-            span.set_attribute("auth.user_id", user.sub)
-            span.set_attribute("auth.username", user.preferred_username or "unknown")
-            logger.info(f"User authenticated: {user.sub}")
+            # Enrichir le span avec toutes les informations utilisateur
+            span.set_attribute("user.keycloak_id", user.sub)
+            span.set_attribute("user.email", user.email or "")
+            span.set_attribute("user.username", user.preferred_username or "")
+            span.set_attribute("user.given_name", user.given_name or "")
+            span.set_attribute("user.family_name", user.family_name or "")
+            span.set_attribute("user.name", user.name or "")
+
+            logger.info(
+                f"User authenticated: {user.sub} - "
+                f"{user.name or user.preferred_username or 'Unknown'}"
+            )
             return user
         except Exception as e:
             logger.error(f"Failed to create user from token data: {e}")

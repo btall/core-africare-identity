@@ -20,11 +20,17 @@ from app.api.v1 import api as api_v1
 from app.core.config import settings
 from app.core.database import create_db_and_tables
 from app.core.events import lifespan as events_lifespan
+from app.core.webhook_streams import (
+    close_webhook_redis,
+    init_webhook_redis,
+    register_webhook_handler,
+    start_webhook_consumer,
+    stop_webhook_consumer,
+)
+from app.services.webhook_processor import route_webhook_event
 
 # from app.services import event_service  # Disabled - using Redis instead of Azure Event Hub
 
-# Configuration du logging standard
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 # azure_eventhub_logger = logging.getLogger("azure.eventhub")  # Disabled - not using Azure Event Hub
 # azure_eventhub_logger.setLevel(logging.WARNING)
@@ -34,28 +40,45 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """
     Gère le cycle de vie de l'application:
-    - Initialise le système d'événements (redis).
+    - Initialise le système d'événements (Redis Pub/Sub + Streams).
     - Crée les tables de base de données.
-    - Démarre les consommateurs d'événements.
+    - Démarre les consommateurs d'événements et webhook worker.
     - Arrête proprement les services.
     """
-    await create_db_and_tables()
+    logger.info("=== Application Startup ===")
 
-    # Utiliser le lifespan des événements (redis)
+    # 1. Créer les tables de base de données
+    await create_db_and_tables()
+    logger.info("Tables de base de données créées")
+
+    # 2. Utiliser le lifespan des événements (Redis Pub/Sub)
     async with events_lifespan(app):
-        # Démarrer tous les consommateurs d'événements
         try:
-            # logger.info("Démarrage du consommateur pour ")
-            # tg.create_task(event_service.start_eventhub_consumer_(), name="consumer_")
-            # Disabled - using Redis Pub/Sub instead of Azure Event Hub
-            logger.info("Application startup complete.")
+            # 3. Initialiser Redis Streams pour webhooks
+            await init_webhook_redis()
+            logger.info("Redis Streams initialisé pour webhooks")
+
+            # 4. Enregistrer le handler webhook
+            register_webhook_handler(route_webhook_event)
+            logger.info("Handler webhook enregistré")
+
+            # 5. Démarrer le consumer webhook en background
+            await start_webhook_consumer()
+            logger.info("Webhook consumer démarré en background")
+
+            logger.info("=== Application Startup Complete ===")
             yield
+
         finally:
             # Arrêter tous les consommateurs
-            logger.info("Arrêt des consommateurs d'événements...")
+            logger.info("=== Application Shutdown ===")
+            await stop_webhook_consumer()
+            await close_webhook_redis()
+            logger.info("=== Application Shutdown Complete ===")
 
 
-logger.info("Application shutdown complete.")
+# Confirmation shutdown (pour logs)
+logger.info("Application module loaded")
 
 
 app = FastAPI(
@@ -94,7 +117,7 @@ if settings.ENVIRONMENT != "development":
     )
 
 # Include API v1 (current version)
-app.include_router(api_v1.router, prefix=settings.get_api_prefix("v1"), tags=["v1"])
+app.include_router(api_v1.router, prefix=settings.get_api_prefix("v1"))
 
 # Future versions: uncomment when ready
 # app.include_router(
