@@ -251,6 +251,117 @@ Tous les composants émettent des spans OpenTelemetry:
 - `route_webhook_event`: Router
 - `sync_user_registration` (etc.): Handlers spécifiques
 
+### Métriques OpenTelemetry
+
+Le système webhook expose automatiquement des métriques OpenTelemetry qui peuvent être exportées vers Prometheus, Grafana, ou tout autre backend compatible.
+
+#### Counters (cumulative)
+
+| Métrique | Type | Description | Labels |
+|----------|------|-------------|--------|
+| `webhook.events.produced` | Counter | Événements persistés dans Redis Streams (XADD) | `event_type` |
+| `webhook.events.consumed` | Counter | Événements consommés depuis Redis Streams (XREADGROUP) | `event_type` |
+| `webhook.events.acked` | Counter | Événements traités avec succès (XACK) | `event_type` |
+| `webhook.events.failed` | Counter | Événements en échec (exceptions ou handler failure) | `event_type`, `reason` |
+| `webhook.events.dlq` | Counter | Événements déplacés vers Dead Letter Queue | `event_type` |
+| `webhook.events.retried` | Counter | Événements reclaimed pour retry (XCLAIM) | - |
+
+#### Histograms
+
+| Métrique | Type | Description | Labels |
+|----------|------|-------------|--------|
+| `webhook.processing.duration` | Histogram | Durée de traitement des événements (secondes) | `event_type`, `success` |
+
+#### Gauges (observables)
+
+| Métrique | Type | Description | Fréquence |
+|----------|------|-------------|-----------|
+| `webhook.consumer.lag` | Gauge | Nombre de messages pending (non-ACK) | Callback async |
+| `webhook.dlq.length` | Gauge | Nombre de messages dans la DLQ | Callback async |
+
+#### Exemples de requêtes PromQL
+
+**Consumer lag (messages en attente):**
+```promql
+webhook_consumer_lag{job="core-africare-identity"}
+```
+
+**Taux d'erreurs:**
+```promql
+rate(webhook_events_failed_total[5m])
+```
+
+**P95 durée de traitement:**
+```promql
+histogram_quantile(0.95,
+  rate(webhook_processing_duration_bucket[5m])
+)
+```
+
+**Messages en DLQ:**
+```promql
+webhook_dlq_length{job="core-africare-identity"}
+```
+
+**Throughput (événements/seconde):**
+```promql
+rate(webhook_events_acked_total[1m])
+```
+
+#### Dashboard Grafana recommandé
+
+Variables:
+- `$job` = `core-africare-identity`
+- `$event_type` = label `event_type`
+
+Panneaux suggérés:
+1. **Consumer Lag** (Gauge): `webhook_consumer_lag`
+2. **DLQ Length** (Gauge): `webhook_dlq_length`
+3. **Throughput** (Graph): `rate(webhook_events_acked_total[5m])`
+4. **Error Rate** (Graph): `rate(webhook_events_failed_total[5m])`
+5. **Processing Duration P95** (Graph): `histogram_quantile(0.95, ...)`
+6. **Events by Type** (Pie chart): `sum by (event_type) (webhook_events_consumed_total)`
+
+#### Alertes recommandées
+
+```yaml
+# Prometheus alerts
+groups:
+  - name: webhook_alerts
+    rules:
+      - alert: WebhookConsumerLagHigh
+        expr: webhook_consumer_lag > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Consumer lag élevé ({{ $value }} messages pending)"
+
+      - alert: WebhookDLQNotEmpty
+        expr: webhook_dlq_length > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DLQ non vide ({{ $value }} messages en échec)"
+
+      - alert: WebhookErrorRateHigh
+        expr: rate(webhook_events_failed_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Taux d'erreurs élevé ({{ $value }}/s)"
+
+      - alert: WebhookProcessingDurationHigh
+        expr: histogram_quantile(0.95, rate(webhook_processing_duration_bucket[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Durée de traitement élevée (P95: {{ $value }}s)"
+```
+
 ### Logs structurés
 
 Exemples de logs:

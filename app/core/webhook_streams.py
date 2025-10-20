@@ -34,11 +34,12 @@ Usage:
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 import redis.asyncio as redis
-from opentelemetry import trace
+from opentelemetry import metrics, trace
 from opentelemetry.trace import Status, StatusCode
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,6 +49,87 @@ from app.schemas.keycloak import KeycloakWebhookEvent, SyncResult
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
+meter = metrics.get_meter(__name__)
+
+# OpenTelemetry Metrics pour monitoring
+webhook_events_produced = meter.create_counter(
+    "webhook.events.produced",
+    description="Nombre total d'événements webhook persistés dans Redis Streams (XADD)",
+    unit="events",
+)
+
+webhook_events_consumed = meter.create_counter(
+    "webhook.events.consumed",
+    description="Nombre total d'événements webhook consommés depuis Redis Streams (XREADGROUP)",
+    unit="events",
+)
+
+webhook_events_acked = meter.create_counter(
+    "webhook.events.acked",
+    description="Nombre total d'événements webhook traités avec succès (XACK)",
+    unit="events",
+)
+
+webhook_events_failed = meter.create_counter(
+    "webhook.events.failed",
+    description="Nombre total d'événements webhook en échec (exceptions)",
+    unit="events",
+)
+
+webhook_events_dlq = meter.create_counter(
+    "webhook.events.dlq",
+    description="Nombre total d'événements webhook déplacés vers Dead Letter Queue",
+    unit="events",
+)
+
+webhook_events_retried = meter.create_counter(
+    "webhook.events.retried",
+    description="Nombre total d'événements webhook reclaimed pour retry (XCLAIM)",
+    unit="events",
+)
+
+webhook_processing_duration = meter.create_histogram(
+    "webhook.processing.duration",
+    description="Durée de traitement des événements webhook (secondes)",
+    unit="s",
+)
+
+
+async def _get_consumer_lag() -> int:
+    """Callback pour mesurer le consumer lag (messages pending)."""
+    if not webhook_redis_client:
+        return 0
+    try:
+        pending = await webhook_redis_client.xpending(WEBHOOK_STREAM_NAME, WEBHOOK_CONSUMER_GROUP)
+        return pending.get("pending", 0) if pending else 0
+    except Exception:
+        return 0
+
+
+async def _get_dlq_length() -> int:
+    """Callback pour mesurer la longueur de la DLQ."""
+    if not webhook_redis_client:
+        return 0
+    try:
+        return await webhook_redis_client.xlen(f"{WEBHOOK_STREAM_NAME}:dlq")
+    except Exception:
+        return 0
+
+
+# Gauges observables (callbacks async)
+meter.create_observable_gauge(
+    "webhook.consumer.lag",
+    callbacks=[lambda options: _get_consumer_lag()],
+    description="Nombre de messages pending (non-ACK) dans Redis Streams",
+    unit="messages",
+)
+
+meter.create_observable_gauge(
+    "webhook.dlq.length",
+    callbacks=[lambda options: _get_dlq_length()],
+    description="Nombre de messages dans la Dead Letter Queue",
+    unit="messages",
+)
 
 # Configuration Redis Streams
 WEBHOOK_STREAM_NAME = "keycloak:webhooks"
@@ -159,6 +241,9 @@ async def add_webhook_event(event: KeycloakWebhookEvent) -> str:
 
             # XADD: Ajoute au stream avec ID auto-généré
             message_id = await webhook_redis_client.xadd(WEBHOOK_STREAM_NAME, event_data)
+
+            # Métrique OpenTelemetry: événement produit
+            webhook_events_produced.add(1, {"event_type": event.event_type})
 
             logger.info(
                 f"Webhook event ajouté au stream: type={event.event_type}, "
@@ -272,6 +357,13 @@ async def _process_webhook_message(message_id: str, message_data: dict):
     with tracer.start_as_current_span(
         "process_webhook_message", kind=trace.SpanKind.CONSUMER, attributes=span_attributes
     ) as span:
+        # Métrique OpenTelemetry: événement consommé
+        event_type = message_data.get("event_type", "unknown")
+        webhook_events_consumed.add(1, {"event_type": event_type})
+
+        # Mesure de la durée de traitement
+        start_time = time.time()
+
         try:
             # Incrémenter le compteur de tentatives
             delivery_attempts = int(message_data.get("delivery_attempts", 0)) + 1
@@ -308,6 +400,15 @@ async def _process_webhook_message(message_id: str, message_data: dict):
                         WEBHOOK_STREAM_NAME, WEBHOOK_CONSUMER_GROUP, message_id
                     )
 
+                    # Métrique OpenTelemetry: événement ACK
+                    webhook_events_acked.add(1, {"event_type": event.event_type})
+
+                    # Métrique OpenTelemetry: durée de traitement
+                    duration = time.time() - start_time
+                    webhook_processing_duration.record(
+                        duration, {"event_type": event.event_type, "success": "true"}
+                    )
+
                     logger.info(
                         f"Webhook traité avec succès: id={message_id}, "
                         f"type={event.event_type}, message={result.message}"
@@ -317,6 +418,11 @@ async def _process_webhook_message(message_id: str, message_data: dict):
 
                 else:
                     # Échec mais pas d'exception: laisser pending pour retry
+                    # Métrique OpenTelemetry: échec (sera retry)
+                    webhook_events_failed.add(
+                        1, {"event_type": event.event_type, "reason": "handler_failure"}
+                    )
+
                     logger.warning(
                         f"Webhook traité avec échec (retry): id={message_id}, "
                         f"message={result.message}"
@@ -330,6 +436,9 @@ async def _process_webhook_message(message_id: str, message_data: dict):
 
         except Exception as e:
             # Exception non gérée: laisser pending pour retry
+            # Métrique OpenTelemetry: exception
+            webhook_events_failed.add(1, {"event_type": event_type, "reason": "exception"})
+
             span.record_exception(e)
             span.set_status(Status(StatusCode.ERROR, str(e)))
 
@@ -376,6 +485,10 @@ async def _reclaim_pending_messages():
                     message_ids=[message_id],
                 )
 
+                # Métrique OpenTelemetry: retry (reclaim)
+                if claimed:
+                    webhook_events_retried.add(len(claimed))
+
                 # Retraiter les messages réclamés
                 for claimed_message_id, claimed_data in claimed:
                     await _process_webhook_message(claimed_message_id, claimed_data)
@@ -404,6 +517,10 @@ async def _move_to_dead_letter(message_id: str, message_data: dict):
         }
 
         dlq_id = await webhook_redis_client.xadd(dead_letter_stream, dlq_data)
+
+        # Métrique OpenTelemetry: message vers DLQ
+        event_type = message_data.get("event_type", "unknown")
+        webhook_events_dlq.add(1, {"event_type": event_type})
 
         logger.error(
             f"Message déplacé vers DLQ: original_id={message_id}, "
