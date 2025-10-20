@@ -25,6 +25,28 @@ services:
     networks:
       - africare-network
 
+  migrate:
+    build: .
+    container_name: core-africare-identity-migrate
+    command: ["poetry", "run", "alembic", "upgrade", "head"]
+    volumes:
+      - .:/home/app/web
+    environment:
+      # PostgreSQL Database
+      SQLALCHEMY_DATABASE_URI: postgresql+asyncpg://core-africare-identity:vd8bveedbnBpMcYr_8qB6A@postgres:5432/core-africare-identity
+      # Autres variables minimales pour Alembic
+      OTEL_SERVICE_NAME: core-africare-identity
+      KEYCLOAK_SERVER_URL: https://keycloak.africare.app/auth
+      KEYCLOAK_REALM: africare
+      KEYCLOAK_CLIENT_ID: core-africare-identity
+      WEBHOOK_SECRET: dummy-secret-for-migration
+    depends_on:
+      - postgres
+    networks:
+      - africare-network
+    profiles:
+      - tools
+
   core-africare-identity:
     build: .
     container_name: core-africare-identity

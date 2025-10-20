@@ -1,4 +1,4 @@
-.PHONY: install test test-unit test-integration test-all test-services-up test-services-down test-services-clean test-services-status lint lint-fix format run clean migrate migrate-up migrate-down help
+.PHONY: install test test-unit test-integration test-all test-services-up test-services-down test-services-clean test-services-status lint lint-fix format run clean migrate migrate-up migrate-down migrate-docker help
 .DEFAULT_GOAL := help
 
 # Port par défaut pour uvicorn (peut être surchargé)
@@ -86,6 +86,12 @@ migrate-up:
 # Annulation de la dernière migration Alembic
 migrate-down:
 	poetry run alembic downgrade -1
+
+# Application des migrations via Docker (sans installation locale)
+migrate-docker:
+	@echo "Application des migrations via Docker..."
+	docker-compose run --rm migrate
+
 # Nettoyage complet des fichiers temporaires et générés
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
@@ -131,8 +137,9 @@ help:
 	@echo "Migrations de base de données:"
 	@echo "  make migrate              Créer une nouvelle migration (alembic)"
 	@echo "                            (Utiliser 'make migrate MESSAGE=\"Mon message\"')"
-	@echo "  make migrate-up           Appliquer les migrations (alembic)"
-	@echo "  make migrate-down         Annuler la dernière migration (alembic)"
+	@echo "  make migrate-up           Appliquer les migrations (alembic - local)"
+	@echo "  make migrate-down         Annuler la dernière migration (alembic - local)"
+	@echo "  make migrate-docker       Appliquer les migrations via Docker (sans Poetry local)"
 	@echo ""
 	@echo "Utilitaires:"
 	@echo "  make clean                Nettoyer les fichiers générés et caches"
