@@ -1,21 +1,22 @@
 """update gender field to male/female only (legal requirement)
 
 Revision ID: 2463648ab224
-Revises: 
+Revises:
 Create Date: 2025-10-13 00:40:43.841917
 
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = '2463648ab224'
-down_revision: Union[str, None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "2463648ab224"
+down_revision: str | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -42,11 +43,11 @@ def upgrade() -> None:
 
     # Étape 2: Réduire la taille de la colonne (PostgreSQL supporte VARCHAR sans perte)
     op.alter_column(
-        'patients',
-        'gender',
+        "patients",
+        "gender",
         type_=sa.String(length=10),
         existing_type=sa.String(length=20),
-        existing_nullable=False
+        existing_nullable=False,
     )
 
 
@@ -58,9 +59,9 @@ def downgrade() -> None:
     """
     # Restaurer la taille de colonne
     op.alter_column(
-        'patients',
-        'gender',
+        "patients",
+        "gender",
         type_=sa.String(length=20),
         existing_type=sa.String(length=10),
-        existing_nullable=False
+        existing_nullable=False,
     )

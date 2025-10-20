@@ -1,29 +1,33 @@
 """Endpoint webhook pour la synchronisation Keycloak.
 
 Ce module expose l'endpoint webhook qui reçoit les événements
-de Keycloak et déclenche la synchronisation vers PostgreSQL.
+de Keycloak et les persiste dans Redis Streams pour traitement asynchrone.
+
+Architecture résiliente:
+    Keycloak → Webhook → XADD Redis Stream → Return 200 OK
+                              ↓
+                    Background Worker (traitement async)
+
+Avantages:
+    - Persistence: Événements survivent aux crashes
+    - Retry automatique: Messages non-ACK sont reconsommés
+    - Performance: Keycloak reçoit 200 OK immédiatement
+    - Monitoring: XPENDING pour voir messages en cours
 """
 
 import logging
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, HTTPException, Request, status
 from opentelemetry import trace
-from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
 
-from app.core.database import get_session
 from app.core.webhook_security import verify_webhook_request
+from app.core.webhook_streams import add_webhook_event
 from app.schemas.keycloak import (
     KeycloakWebhookEvent,
-    SyncResult,
     WebhookHealthCheck,
-)
-from app.services.keycloak_sync_service import (
-    sync_email_update,
-    sync_profile_update,
-    sync_user_registration,
-    track_user_login,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,47 +38,65 @@ router = APIRouter()
 # Stats pour health check (en mémoire, réinitialisées au redémarrage)
 webhook_stats = {
     "last_event_received": None,
-    "total_events_processed": 0,
-    "failed_events_count": 0,
+    "total_events_received": 0,
+    "total_events_persisted": 0,
+    "failed_to_persist_count": 0,
 }
+
+
+class WebhookAcceptedResponse(BaseModel):
+    """Réponse immédiate du webhook (événement accepté et persisté)."""
+
+    accepted: bool
+    message_id: str
+    event_type: str
+    user_id: str
+    timestamp: str
+    message: str
 
 
 @router.post(
     "/keycloak",
-    response_model=SyncResult,
-    status_code=status.HTTP_200_OK,
-    summary="Webhook Keycloak",
-    description="Reçoit et traite les événements webhook de Keycloak pour synchronisation temps-réel",
+    response_model=WebhookAcceptedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Webhook Keycloak (Resilient avec Redis Streams)",
+    description="Reçoit, valide et persiste les événements Keycloak pour traitement asynchrone",
     responses={
-        200: {"description": "Événement traité avec succès"},
+        202: {"description": "Événement accepté et persisté dans Redis Streams"},
         400: {"description": "Événement invalide ou headers manquants"},
         401: {"description": "Signature webhook invalide"},
-        500: {"description": "Erreur lors du traitement de l'événement"},
+        500: {"description": "Erreur lors de la persistence de l'événement"},
     },
 )
 async def receive_keycloak_webhook(
     request: Request,
     event: Annotated[KeycloakWebhookEvent, Body()],
-    db: AsyncSession = Depends(get_session),
-) -> SyncResult:
+) -> WebhookAcceptedResponse:
     """
-    Endpoint webhook pour recevoir les événements Keycloak.
+    Endpoint webhook résilient pour les événements Keycloak.
 
-    Processus:
-    1. Vérifier la signature HMAC-SHA256
-    2. Parser l'événement
-    3. Router vers le handler approprié selon le type
-    4. Retourner le résultat de synchronisation
+    Architecture:
+        1. Vérification signature HMAC-SHA256
+        2. Validation Pydantic de l'événement
+        3. Persistence dans Redis Streams (XADD)
+        4. Retour 202 Accepted immédiat
+        5. Background worker traite l'événement de façon async
+
+    Avantages vs traitement synchrone:
+        - Keycloak reçoit 200 OK rapidement (pas de timeout)
+        - Événements persistés (survivent aux crashes)
+        - Retry automatique en cas d'échec
+        - Scaling horizontal possible (consumer groups)
 
     Args:
-        request: Requête FastAPI (contient le payload webhook)
-        db: Session de base de données
+        request: Requête FastAPI (pour vérification signature)
+        event: Événement Keycloak validé par Pydantic
 
     Returns:
-        SyncResult avec les détails de la synchronisation
+        WebhookAcceptedResponse avec message_id Redis et détails
 
     Raises:
-        HTTPException: Si signature invalide ou erreur de traitement
+        HTTPException: Si signature invalide ou échec persistence
     """
     with tracer.start_as_current_span("receive_keycloak_webhook") as span:
         try:
@@ -82,52 +104,55 @@ async def receive_keycloak_webhook(
             await verify_webhook_request(request)
             logger.debug("Signature webhook vérifiée")
 
-            logger.info(f"Event payload: {event.model_dump(exclude_none=True, exclude_unset=True)}")
-
             span.set_attribute("event.type", event.event_type)
             span.set_attribute("event.user_id", event.user_id)
             span.set_attribute("event.realm_id", event.realm_id)
 
             logger.info(
-                f"Événement webhook reçu: type={event.event_type}, "
+                f"Webhook reçu: type={event.event_type}, "
                 f"user_id={event.user_id}, realm={event.realm_id}"
             )
 
-            # 2. Router vers le handler approprié
-            result = await _route_event(db, event)
+            # 2. Persister dans Redis Streams (XADD)
+            message_id = await add_webhook_event(event)
 
             # 3. Mettre à jour les stats
             webhook_stats["last_event_received"] = datetime.now()
-            webhook_stats["total_events_processed"] += 1
+            webhook_stats["total_events_received"] += 1
+            webhook_stats["total_events_persisted"] += 1
 
-            if not result.success:
-                webhook_stats["failed_events_count"] += 1
-
-            span.set_attribute("sync.success", result.success)
-            span.set_attribute("sync.message", result.message)
+            span.set_attribute("messaging.message.id", message_id)
+            span.add_event("Événement persisté dans Redis Streams")
 
             logger.info(
-                f"Événement traité: type={event.event_type}, success={result.success}, "
-                f"message={result.message}"
+                f"Webhook persisté: type={event.event_type}, "
+                f"user_id={event.user_id}, message_id={message_id}"
             )
 
-            return result
+            return WebhookAcceptedResponse(
+                accepted=True,
+                message_id=message_id,
+                event_type=event.event_type,
+                user_id=event.user_id,
+                timestamp=event.timestamp,
+                message="Event accepted and queued for processing",
+            )
 
         except HTTPException:
             # Re-raise les exceptions HTTP (signature invalide, etc.)
-            webhook_stats["failed_events_count"] += 1
+            webhook_stats["failed_to_persist_count"] += 1
             raise
 
         except Exception as e:
             span.record_exception(e)
             span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
-            webhook_stats["failed_events_count"] += 1
+            webhook_stats["failed_to_persist_count"] += 1
 
-            logger.error(f"Erreur lors du traitement du webhook: {e}", exc_info=True)
+            logger.error(f"Erreur lors de la persistence webhook: {e}", exc_info=True)
 
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to process webhook: {e!s}",
+                detail=f"Failed to persist webhook event: {e!s}",
             ) from e
 
 
@@ -142,13 +167,15 @@ async def webhook_health_check() -> WebhookHealthCheck:
     Health check du webhook endpoint.
 
     Retourne l'état de santé et des statistiques d'utilisation.
+    Note: Les stats reflètent uniquement la persistence (XADD),
+    pas le traitement asynchrone. Voir Redis XPENDING pour stats de traitement.
 
     Returns:
         WebhookHealthCheck avec status et métriques
     """
     # Déterminer le status de santé
-    total = webhook_stats["total_events_processed"]
-    failed = webhook_stats["failed_events_count"]
+    total = webhook_stats["total_events_received"]
+    failed = webhook_stats["failed_to_persist_count"]
 
     if total == 0:
         health_status = "healthy"  # Aucun événement encore
@@ -163,37 +190,6 @@ async def webhook_health_check() -> WebhookHealthCheck:
         status=health_status,
         webhook_endpoint="/api/v1/webhooks/keycloak",
         last_event_received=webhook_stats["last_event_received"],
-        total_events_processed=webhook_stats["total_events_processed"],
-        failed_events_count=webhook_stats["failed_events_count"],
+        total_events_processed=webhook_stats["total_events_persisted"],
+        failed_events_count=webhook_stats["failed_to_persist_count"],
     )
-
-
-async def _route_event(db: AsyncSession, event: KeycloakWebhookEvent) -> SyncResult:
-    """
-    Route un événement webhook vers le handler approprié.
-
-    Args:
-        db: Session de base de données
-        event: Événement Keycloak à traiter
-
-    Returns:
-        SyncResult du traitement
-
-    Raises:
-        ValueError: Si type d'événement non supporté
-    """
-    handlers = {
-        "REGISTER": sync_user_registration,
-        "UPDATE_PROFILE": sync_profile_update,
-        "UPDATE_EMAIL": sync_email_update,
-        "LOGIN": track_user_login,
-    }
-
-    handler = handlers.get(event.event_type)
-
-    if not handler:
-        logger.warning(f"Type d'événement non supporté: {event.event_type}")
-        raise ValueError(f"Unsupported event type: {event.event_type}")
-
-    # Appeler le handler
-    return await handler(db, event)
