@@ -105,6 +105,17 @@ sequenceDiagram
     end
 ```
 
+### Avantages vs architecture initiale
+
+| Avant                        | Après                        |
+| ---------------------------- | ---------------------------- |
+| ❌ Perte événements au crash | ✅ Persistence Redis Streams |
+| ❌ Pas de retry              | ✅ Retry automatique XCLAIM  |
+| ❌ Timeout Keycloak          | ✅ 202 Accepted immédiat     |
+| ❌ Monitoring limité         | ✅ 9 métriques OpenTelemetry |
+| ❌ Pas d'alerting            | ✅ 4 alertes Prometheus      |
+| ❌ 1 worker                  | ✅ Consumer groups (scaling) |
+
 ## Composants
 
 ### 1. Webhook Endpoint (`app/api/v1/endpoints/webhooks.py`)
@@ -112,6 +123,7 @@ sequenceDiagram
 **Responsabilité**: Recevoir, valider et persister immédiatement les événements Keycloak.
 
 **Processus**:
+
 1. Vérification signature HMAC-SHA256
 2. Validation Pydantic de l'événement
 3. XADD au Redis Stream
@@ -193,13 +205,13 @@ WEBHOOK_SIGNATURE_TOLERANCE=300  # 5 minutes
 
 Ces paramètres sont définis dans `app/core/webhook_streams.py`:
 
-| Paramètre | Valeur par défaut | Description |
-|-----------|-------------------|-------------|
-| `WEBHOOK_STREAM_NAME` | `keycloak:webhooks` | Nom du Redis Stream |
-| `WEBHOOK_CONSUMER_GROUP` | `core-africare-identity-workers` | Consumer group name |
-| `MAX_DELIVERY_ATTEMPTS` | `5` | Nombre max de retries avant DLQ |
-| `RETRY_BACKOFF_MS` | `5000` | Délai entre retries (5s) |
-| `CLAIM_IDLE_TIME_MS` | `60000` | Temps avant reclaim (1min) |
+| Paramètre                | Valeur par défaut                | Description                     |
+| ------------------------ | -------------------------------- | ------------------------------- |
+| `WEBHOOK_STREAM_NAME`    | `keycloak:webhooks`              | Nom du Redis Stream             |
+| `WEBHOOK_CONSUMER_GROUP` | `core-africare-identity-workers` | Consumer group name             |
+| `MAX_DELIVERY_ATTEMPTS`  | `5`                              | Nombre max de retries avant DLQ |
+| `RETRY_BACKOFF_MS`       | `5000`                           | Délai entre retries (5s)        |
+| `CLAIM_IDLE_TIME_MS`     | `60000`                          | Temps avant reclaim (1min)      |
 
 ## Monitoring et observabilité
 
@@ -257,41 +269,44 @@ Le système webhook expose automatiquement des métriques OpenTelemetry qui peuv
 
 #### Counters (cumulative)
 
-| Métrique | Type | Description | Labels |
-|----------|------|-------------|--------|
-| `webhook.events.produced` | Counter | Événements persistés dans Redis Streams (XADD) | `event_type` |
-| `webhook.events.consumed` | Counter | Événements consommés depuis Redis Streams (XREADGROUP) | `event_type` |
-| `webhook.events.acked` | Counter | Événements traités avec succès (XACK) | `event_type` |
-| `webhook.events.failed` | Counter | Événements en échec (exceptions ou handler failure) | `event_type`, `reason` |
-| `webhook.events.dlq` | Counter | Événements déplacés vers Dead Letter Queue | `event_type` |
-| `webhook.events.retried` | Counter | Événements reclaimed pour retry (XCLAIM) | - |
+| Métrique                  | Type    | Description                                            | Labels                 |
+| ------------------------- | ------- | ------------------------------------------------------ | ---------------------- |
+| `webhook.events.produced` | Counter | Événements persistés dans Redis Streams (XADD)         | `event_type`           |
+| `webhook.events.consumed` | Counter | Événements consommés depuis Redis Streams (XREADGROUP) | `event_type`           |
+| `webhook.events.acked`    | Counter | Événements traités avec succès (XACK)                  | `event_type`           |
+| `webhook.events.failed`   | Counter | Événements en échec (exceptions ou handler failure)    | `event_type`, `reason` |
+| `webhook.events.dlq`      | Counter | Événements déplacés vers Dead Letter Queue             | `event_type`           |
+| `webhook.events.retried`  | Counter | Événements reclaimed pour retry (XCLAIM)               | -                      |
 
 #### Histograms
 
-| Métrique | Type | Description | Labels |
-|----------|------|-------------|--------|
+| Métrique                      | Type      | Description                                   | Labels                  |
+| ----------------------------- | --------- | --------------------------------------------- | ----------------------- |
 | `webhook.processing.duration` | Histogram | Durée de traitement des événements (secondes) | `event_type`, `success` |
 
 #### Gauges (observables)
 
-| Métrique | Type | Description | Fréquence |
-|----------|------|-------------|-----------|
+| Métrique               | Type  | Description                          | Fréquence      |
+| ---------------------- | ----- | ------------------------------------ | -------------- |
 | `webhook.consumer.lag` | Gauge | Nombre de messages pending (non-ACK) | Callback async |
-| `webhook.dlq.length` | Gauge | Nombre de messages dans la DLQ | Callback async |
+| `webhook.dlq.length`   | Gauge | Nombre de messages dans la DLQ       | Callback async |
 
 #### Exemples de requêtes PromQL
 
 **Consumer lag (messages en attente):**
+
 ```promql
 webhook_consumer_lag{job="core-africare-identity"}
 ```
 
 **Taux d'erreurs:**
+
 ```promql
 rate(webhook_events_failed_total[5m])
 ```
 
 **P95 durée de traitement:**
+
 ```promql
 histogram_quantile(0.95,
   rate(webhook_processing_duration_bucket[5m])
@@ -299,11 +314,13 @@ histogram_quantile(0.95,
 ```
 
 **Messages en DLQ:**
+
 ```promql
 webhook_dlq_length{job="core-africare-identity"}
 ```
 
 **Throughput (événements/seconde):**
+
 ```promql
 rate(webhook_events_acked_total[1m])
 ```
@@ -311,10 +328,12 @@ rate(webhook_events_acked_total[1m])
 #### Dashboard Grafana recommandé
 
 Variables:
+
 - `$job` = `core-africare-identity`
 - `$event_type` = label `event_type`
 
 Panneaux suggérés:
+
 1. **Consumer Lag** (Gauge): `webhook_consumer_lag`
 2. **DLQ Length** (Gauge): `webhook_dlq_length`
 3. **Throughput** (Graph): `rate(webhook_events_acked_total[5m])`
@@ -541,33 +560,37 @@ redis-cli DEL keycloak:webhooks:dlq
 
 ## Comparaison avec architecture précédente
 
-| Critère | Synchrone (avant) | Redis Streams (après) |
-|---------|-------------------|----------------------|
-| **Persistence** | Aucune | Messages persistés sur disque |
-| **Resilience pannes** | Événements perdus au crash | Survivent aux redémarrages |
-| **Retry** | Tenacity (mémoire only) | Retry automatique (XPENDING) |
-| **Timeout Keycloak** | Possible si traitement long | 202 Accepted immédiat |
-| **Monitoring** | Stats en mémoire | XPENDING, XINFO, DLQ |
-| **Scalabilité** | Limitée (1 worker) | Consumer groups (N workers) |
-| **Idempotence** | Manuelle | Message IDs uniques |
-| **Dead Letter Queue** | Aucune | DLQ automatique après 5 retries |
+| Critère               | Synchrone (avant)           | Redis Streams (après)           |
+| --------------------- | --------------------------- | ------------------------------- |
+| **Persistence**       | Aucune                      | Messages persistés sur disque   |
+| **Resilience pannes** | Événements perdus au crash  | Survivent aux redémarrages      |
+| **Retry**             | Tenacity (mémoire only)     | Retry automatique (XPENDING)    |
+| **Timeout Keycloak**  | Possible si traitement long | 202 Accepted immédiat           |
+| **Monitoring**        | Stats en mémoire            | XPENDING, XINFO, DLQ            |
+| **Scalabilité**       | Limitée (1 worker)          | Consumer groups (N workers)     |
+| **Idempotence**       | Manuelle                    | Message IDs uniques             |
+| **Dead Letter Queue** | Aucune                      | DLQ automatique après 5 retries |
 
 ## Best practices
 
 1. **Monitoring proactif**: Configurer alertes sur:
+
    - `XPENDING` count > threshold
    - `DLQ length` > 0
    - Consumer lag (via XINFO)
 
 2. **Tuning paramètres**:
+
    - Ajuster `MAX_DELIVERY_ATTEMPTS` selon criticité
    - Adapter `CLAIM_IDLE_TIME_MS` selon charge
 
 3. **Consumer groups multiples**:
+
    - Pour scaling horizontal, lancer plusieurs instances
    - Redis Streams distribue automatiquement les messages
 
 4. **Backup DLQ**:
+
    - Exporter régulièrement la DLQ vers fichier/DB
    - Analyser patterns d'échecs
 
