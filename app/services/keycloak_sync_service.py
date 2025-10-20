@@ -6,25 +6,86 @@ entre les événements Keycloak et la base de données locale.
 
 import logging
 from datetime import datetime
+from typing import Literal
 
+from keycloak import KeycloakAdmin
 from opentelemetry import trace
 from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.events import publish
 from app.core.retry import async_retry_with_backoff
 from app.models.patient import Patient
+from app.models.professional import Professional
 from app.schemas.keycloak import KeycloakWebhookEvent, SyncResult
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
+
+# Client admin Keycloak pour récupérer les rôles utilisateur
+keycloak_admin = KeycloakAdmin(
+    server_url=settings.KEYCLOAK_SERVER_URL,
+    realm_name=settings.KEYCLOAK_REALM,
+    verify=True,
+)
+
+# Stratégies de suppression disponibles
+DeletionStrategy = Literal["soft_delete", "hard_delete", "anonymize"]
 
 # Exceptions DB transitoires qui déclenchent un retry
 TRANSIENT_DB_EXCEPTIONS = (
     OperationalError,  # Connexion DB perdue, timeout, etc.
     DBAPIError,  # Erreurs DB génériques transitoires
 )
+
+
+async def get_user_roles_from_keycloak(user_id: str) -> list[str]:
+    """
+    Récupère les rôles d'un utilisateur depuis Keycloak.
+
+    Cette fonction interroge Keycloak pour obtenir tous les rôles assignés
+    à un utilisateur (realm roles et client roles).
+
+    Args:
+        user_id: UUID de l'utilisateur dans Keycloak
+
+    Returns:
+        Liste des rôles de l'utilisateur (ex: ["patient", "professional"])
+
+    Note:
+        En cas d'erreur lors de la récupération des rôles, retourne une liste vide
+        et log l'erreur pour investigation.
+    """
+    with tracer.start_as_current_span("get_user_roles_from_keycloak") as span:
+        span.set_attribute("user.keycloak_id", user_id)
+
+        try:
+            # Récupérer les realm roles de l'utilisateur
+            realm_roles = keycloak_admin.get_realm_roles_of_user(user_id)
+            roles = [role["name"] for role in realm_roles]
+
+            # Récupérer les client roles (si nécessaire)
+            # Généralement les rôles patient/professional sont des realm roles
+            client_id = keycloak_admin.get_client_id(settings.KEYCLOAK_CLIENT_ID)
+            client_roles = keycloak_admin.get_client_roles_of_user(user_id, client_id)
+            roles.extend([role["name"] for role in client_roles])
+
+            # Dédupliquer
+            roles = list(set(roles))
+
+            span.set_attribute("user.roles", ",".join(roles))
+            logger.info(f"Rôles récupérés pour user {user_id}: {roles}")
+
+            return roles
+
+        except Exception as e:
+            logger.error(f"Erreur lors de la récupération des rôles Keycloak pour {user_id}: {e}")
+            span.record_exception(e)
+            span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
+            # Retourner liste vide en cas d'erreur
+            return []
 
 
 @async_retry_with_backoff(
@@ -437,3 +498,268 @@ async def _create_patient_from_event(db: AsyncSession, event: KeycloakWebhookEve
 
     db.add(patient)
     return patient
+
+
+################################################################################
+# Fonctions de suppression d'utilisateur (DELETE event)
+################################################################################
+
+
+@async_retry_with_backoff(
+    max_attempts=3,
+    min_wait_seconds=1,
+    max_wait_seconds=10,
+    exceptions=TRANSIENT_DB_EXCEPTIONS,
+)
+async def sync_user_deletion(
+    db: AsyncSession, event: KeycloakWebhookEvent, strategy: DeletionStrategy = "anonymize"
+) -> SyncResult:
+    """
+    Synchronise un événement DELETE (suppression d'utilisateur Keycloak).
+
+    Logique basée sur les rôles:
+    - Si rôle "professional" → supprime dans tables professionals ET patients
+    - Si rôle "patient" uniquement → supprime dans table patients uniquement
+
+    Stratégies supportées:
+    1. soft_delete: Marque comme supprimé (is_active=False, deleted_at renseigné)
+    2. hard_delete: Suppression physique de la base de données (non recommandé en santé)
+    3. anonymize: Anonymisation des données personnelles (RGPD compliant, recommandé)
+
+    Args:
+        db: Session de base de données async
+        event: Événement webhook Keycloak
+        strategy: Stratégie de suppression à utiliser
+
+    Returns:
+        SyncResult avec les détails de la suppression
+    """
+    with tracer.start_as_current_span("sync_user_deletion") as span:
+        span.set_attribute("event.type", event.event_type)
+        span.set_attribute("event.user_id", event.user_id)
+        span.set_attribute("deletion.strategy", strategy)
+
+        try:
+            # Récupérer les rôles de l'utilisateur depuis Keycloak
+            user_roles = await get_user_roles_from_keycloak(event.user_id)
+            span.set_attribute("user.roles", ",".join(user_roles))
+
+            has_professional_role = "professional" in user_roles
+            has_patient_role = "patient" in user_roles
+
+            logger.info(
+                f"Suppression user {event.user_id}: "
+                f"professional={has_professional_role}, patient={has_patient_role}"
+            )
+
+            deleted_tables = []
+            patient_id = None
+            professional_id = None
+
+            # Si l'utilisateur a le rôle professional, supprimer dans les deux tables
+            # (car un professional est aussi un patient)
+            if has_professional_role:
+                # Supprimer le profil professional
+                result_prof = await db.execute(
+                    select(Professional).where(Professional.keycloak_user_id == event.user_id)
+                )
+                professional = result_prof.scalar_one_or_none()
+
+                if professional:
+                    professional_id = professional.id
+                    await _apply_deletion_strategy(
+                        db, professional, event, strategy, "professional"
+                    )
+                    deleted_tables.append("professionals")
+                    logger.info(f"Professional supprimé: id={professional_id}, strategy={strategy}")
+
+            # Supprimer le profil patient (toujours présent pour patient et professional)
+            if has_patient_role or has_professional_role:
+                result_patient = await db.execute(
+                    select(Patient).where(Patient.keycloak_user_id == event.user_id)
+                )
+                patient = result_patient.scalar_one_or_none()
+
+                if patient:
+                    patient_id = patient.id
+                    await _apply_deletion_strategy(db, patient, event, strategy, "patient")
+                    deleted_tables.append("patients")
+                    logger.info(f"Patient supprimé: id={patient_id}, strategy={strategy}")
+
+            if not deleted_tables:
+                logger.warning(
+                    f"Aucun profil trouvé pour user_id: {event.user_id} (roles: {user_roles})"
+                )
+                return SyncResult(
+                    success=False,
+                    event_type=event.event_type,
+                    user_id=event.user_id,
+                    patient_id=None,
+                    message=f"No profile found for user (roles: {user_roles})",
+                )
+
+            await db.commit()
+
+            # Publier événement de suppression pour les autres services
+            await publish(
+                "identity.user.deleted",
+                {
+                    "keycloak_user_id": event.user_id,
+                    "patient_id": patient_id,
+                    "professional_id": professional_id,
+                    "deletion_strategy": strategy,
+                    "deleted_tables": deleted_tables,
+                    "user_roles": user_roles,
+                    "deleted_at": datetime.now().isoformat(),
+                    "reason": "keycloak_account_deleted",
+                },
+            )
+
+            span.set_attribute("deletion.patient_id", patient_id or "none")
+            span.set_attribute("deletion.professional_id", professional_id or "none")
+            span.set_attribute("deletion.tables", ",".join(deleted_tables))
+
+            message = f"User deleted from {', '.join(deleted_tables)} using {strategy} strategy"
+
+            return SyncResult(
+                success=True,
+                event_type=event.event_type,
+                user_id=event.user_id,
+                patient_id=patient_id,
+                message=message,
+            )
+
+        except Exception as e:
+            span.record_exception(e)
+            span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
+            logger.error(f"Erreur lors de la synchronisation DELETE: {e}")
+            await db.rollback()
+            raise
+
+
+async def _apply_deletion_strategy(
+    db: AsyncSession,
+    entity: Patient | Professional,
+    event: KeycloakWebhookEvent,
+    strategy: DeletionStrategy,
+    entity_type: Literal["patient", "professional"],
+) -> None:
+    """
+    Applique la stratégie de suppression sur une entité (Patient ou Professional).
+
+    Args:
+        db: Session de base de données
+        entity: Instance Patient ou Professional à supprimer
+        event: Événement webhook Keycloak
+        strategy: Stratégie de suppression
+        entity_type: Type d'entité ("patient" ou "professional")
+    """
+    if strategy == "soft_delete":
+        await _soft_delete(entity, event)
+    elif strategy == "anonymize":
+        await _anonymize(entity, event, entity_type)
+    elif strategy == "hard_delete":
+        await _hard_delete(db, entity)
+    else:
+        raise ValueError(f"Unknown deletion strategy: {strategy}")
+
+
+async def _soft_delete(entity: Patient | Professional, event: KeycloakWebhookEvent) -> None:
+    """
+    Soft delete: Marque l'entité comme supprimée sans effacer les données.
+
+    - is_active = False
+    - deleted_at = maintenant
+    - deleted_by = user_id (auto-suppression)
+    - deletion_reason = user_request
+    """
+    entity.is_active = False
+    entity.deleted_at = datetime.now()
+    entity.deleted_by = event.user_id
+    entity.deletion_reason = "user_request"
+    entity.updated_at = datetime.now()
+
+    logger.info(f"Soft delete {entity.__class__.__name__}: {entity.id}")
+
+
+async def _anonymize(
+    entity: Patient | Professional,
+    event: KeycloakWebhookEvent,
+    entity_type: Literal["patient", "professional"],
+) -> None:
+    """
+    Anonymisation: Remplace les données personnelles par des valeurs anonymes.
+
+    Préserve:
+    - ID (pour relations avec autres services)
+    - Date de naissance / années d'expérience (pour statistiques)
+    - Genre / spécialité (pour statistiques médicales)
+    - Dates de création/modification (audit)
+
+    Anonymise:
+    - Prénom/Nom
+    - Email
+    - Téléphone
+    - Adresse
+    - GPS (pour patients)
+    - Contact d'urgence
+    - Identifiants nationaux
+    """
+    entity_id = entity.id
+
+    # Anonymiser les données communes
+    entity.first_name = f"ANONYME_{entity_id}"
+    entity.last_name = f"{entity_type.upper()}_{entity_id}"
+    entity.email = f"deleted_{entity_id}@anonymized.local"
+    entity.phone = None
+
+    # Données spécifiques aux patients
+    if isinstance(entity, Patient):
+        entity.phone_secondary = None
+        entity.national_id = None
+        entity.address_line1 = None
+        entity.address_line2 = None
+        entity.city = None
+        entity.region = None
+        entity.postal_code = None
+        entity.latitude = None
+        entity.longitude = None
+        entity.emergency_contact_name = None
+        entity.emergency_contact_phone = None
+        entity.notes = "[DONNEES ANONYMISEES CONFORMEMENT RGPD]"
+
+    # Données spécifiques aux professionnels
+    if isinstance(entity, Professional):
+        entity.phone_secondary = None
+        entity.professional_id = None
+        entity.facility_name = None
+        entity.facility_address = None
+        entity.facility_city = None
+        entity.facility_region = None
+        entity.qualifications = "[DONNEES ANONYMISEES CONFORMEMENT RGPD]"
+        entity.notes = "[DONNEES ANONYMISEES CONFORMEMENT RGPD]"
+        entity.digital_signature = None
+
+    # Marquer comme inactif et supprimé
+    entity.is_active = False
+    entity.deleted_at = datetime.now()
+    entity.deleted_by = event.user_id
+    entity.deletion_reason = "gdpr_compliance"
+    entity.updated_at = datetime.now()
+
+    logger.info(f"{entity.__class__.__name__} anonymisé: {entity_id}")
+
+
+async def _hard_delete(db: AsyncSession, entity: Patient | Professional) -> None:
+    """
+    Hard delete: Suppression physique de l'entité.
+
+    ATTENTION: Cette méthode supprime définitivement toutes les données.
+    À utiliser uniquement dans des contextes non-médicaux ou après anonymisation
+    des données médicales dans les autres services.
+    """
+    entity_id = entity.id
+    entity_type = entity.__class__.__name__
+
+    await db.delete(entity)
+    logger.warning(f"Hard delete {entity_type}: {entity_id}")

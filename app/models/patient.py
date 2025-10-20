@@ -117,6 +117,20 @@ class Patient(Base):
         nullable=False, default=False, comment="Identité vérifiée par un professionnel"
     )
 
+    # Soft delete
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+        comment="Date de suppression (soft delete)",
+    )
+    deleted_by: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, comment="Keycloak user ID de l'utilisateur qui a supprimé"
+    )
+    deletion_reason: Mapped[
+        Literal["user_request", "admin_action", "gdpr_compliance", "other"] | None
+    ] = mapped_column(String(50), nullable=True, comment="Raison de la suppression")
+
     # Métadonnées
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

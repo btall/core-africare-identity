@@ -191,6 +191,7 @@ class Settings(BaseSettings):
     class Config:
         case_sensitive = True
         env_file = ".env"
+        extra = "ignore"  # Ignorer les variables d'environnement non définies (ex: KEYCLOAK_CLIENT_SECRET)
 
 
 # Instance unique des paramètres chargée depuis .env

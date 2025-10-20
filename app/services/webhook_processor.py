@@ -13,6 +13,7 @@ Handlers supportés:
     - UPDATE_PROFILE: sync_profile_update (mise à jour profil)
     - UPDATE_EMAIL: sync_email_update (mise à jour email)
     - LOGIN: track_user_login (tracking analytics)
+    - DELETE: sync_user_deletion (suppression/anonymisation patient/professional)
 """
 
 import logging
@@ -24,6 +25,7 @@ from app.schemas.keycloak import KeycloakWebhookEvent, SyncResult
 from app.services.keycloak_sync_service import (
     sync_email_update,
     sync_profile_update,
+    sync_user_deletion,
     sync_user_registration,
     track_user_login,
 )
@@ -37,6 +39,7 @@ EVENT_HANDLERS = {
     "UPDATE_PROFILE": sync_profile_update,
     "UPDATE_EMAIL": sync_email_update,
     "LOGIN": track_user_login,
+    "DELETE": sync_user_deletion,
 }
 
 
