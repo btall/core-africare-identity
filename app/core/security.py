@@ -36,12 +36,76 @@ class User(BaseModel):
 
 
 async def verify_token(token: str) -> dict:
-    """Verify JWT token with Keycloak."""
+    """
+    Verify JWT token with Keycloak.
+
+    Validates:
+    - Token signature and expiration (via decode_token)
+    - iss (issuer) - must be from our Keycloak realm
+    - azp (authorized party) - must be from allowed frontend clients
+    - aud (audience) - must include this service or be 'account'
+    """
     with tracer.start_as_current_span("verify_keycloak_token") as span:
         try:
             # Decode and verify token with Keycloak (validate=True ensures full verification)
             token_info = keycloak_openid.decode_token(token, validate=True)
+
+            # Validate iss (issuer) - who issued this token
+            # Must be from our Keycloak realm
+            expected_issuer = (
+                f"{settings.KEYCLOAK_SERVER_URL.rstrip('/')}/realms/{settings.KEYCLOAK_REALM}"
+            )
+            iss = token_info.get("iss")
+            if not iss or iss != expected_issuer:
+                logger.error(f"Invalid issuer in token: {iss}. Expected: {expected_issuer}")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=f"Token from unauthorized issuer: {iss}",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
+            # Validate azp (authorized party) - who requested this token
+            # Only accept tokens from our known frontend clients
+            allowed_azp = {
+                "apps-africare-provider-portal",  # Healthcare provider portal
+                "apps-africare-patient-portal",  # Patient portal
+                "apps-africare-admin-portal",  # Admin portal
+            }
+
+            azp = token_info.get("azp")
+            if not azp or azp not in allowed_azp:
+                logger.error(f"Invalid azp in token: {azp}. Expected one of: {allowed_azp}")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=f"Token not authorized for this service (invalid azp: {azp})",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
+            # Validate aud (audience) - who can use this token
+            # Accept tokens meant for this service or the generic 'account' audience
+            aud = token_info.get("aud", [])
+            if isinstance(aud, str):
+                aud = [aud]
+
+            valid_audiences = {"account", settings.KEYCLOAK_CLIENT_ID}
+            if not any(audience in valid_audiences for audience in aud):
+                logger.error(
+                    f"Invalid audience in token: {aud}. Expected one of: {valid_audiences}"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=f"Token not intended for this service (invalid audience: {aud})",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
             span.set_attribute("auth.user_id", token_info.get("sub"))
+            span.set_attribute("auth.iss", iss)
+            span.set_attribute("auth.azp", azp)
+            span.set_attribute("auth.aud", str(aud))
+
+            logger.debug(
+                f"Token validated successfully - iss: {iss}, azp: {azp}, aud: {aud}, user: {token_info.get('sub')}"
+            )
             return token_info
         except Exception as e:
             logger.error(f"Token verification failed: {e}")
