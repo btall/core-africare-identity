@@ -341,7 +341,7 @@ async def delete_user(user_id: str):
 
 ```python
 # Good
-require_roles("healthcare_provider", "clinic_admin")
+require_roles("professional", "admin")
 
 # Avoid generic names
 require_roles("user", "role1")
