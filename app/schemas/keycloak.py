@@ -10,10 +10,12 @@ Types d'événements supportés:
 - LOGIN: Connexion utilisateur (pour tracking)
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+from app.schemas.utils import Email, NationalId, PhoneNumber
 
 
 class KeycloakUserAttributes(BaseModel):
@@ -21,12 +23,12 @@ class KeycloakUserAttributes(BaseModel):
 
     last_name: list[str] | None = Field(None, alias="lastName")
     first_name: list[str] | None = Field(None, alias="firstName")
-    email: list[str] | None = None
+    email: list[Email] | None = None
     username: list[str] | None = None
-    phone: list[str] | None = None
-    date_of_birth: list[str] | None = None
+    phone: list[PhoneNumber] | None = None
+    date_of_birth: list[date] | None = Field(None, alias="dateOfBirth")
     gender: list[str] | None = None
-    national_id: list[str] | None = None
+    national_id: list[NationalId] | None = None
     country: list[str] | None = None
     region: list[str] | None = None
     city: list[str] | None = None
@@ -62,13 +64,13 @@ class KeycloakUser(BaseModel):
 
     # Attributs AfriCare (pour compatibilité avec details)
     phone: str | None = None
-    date_of_birth: str | None = None
-    gender: str | None = None
+    date_of_birth: date | None = Field(None, alias="dateOfBirth", description="Date de naissance")
+    gender: Literal["male", "female"] | None = None
     national_id: str | None = None
     country: str | None = None
     region: str | None = None
     city: str | None = None
-    preferred_language: str | None = None
+    preferred_language: Literal["fr", "en"] | None = None
 
     model_config = {
         "extra": "allow",  # Permet les champs non définis

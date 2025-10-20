@@ -5,7 +5,7 @@ entre les événements Keycloak et la base de données locale.
 """
 
 import logging
-from datetime import date, datetime
+from datetime import datetime
 
 from opentelemetry import trace
 from sqlalchemy import select
@@ -411,24 +411,18 @@ async def _create_patient_from_event(db: AsyncSession, event: KeycloakWebhookEve
     if not user.first_name or not user.last_name:
         raise ValueError("first_name et last_name sont requis")
 
-    if not user.date_of_birth:
+    if user.date_of_birth is None:
         raise ValueError("date_of_birth est requis")
 
     if not user.gender:
         raise ValueError("gender est requis")
-
-    # Parser la date de naissance
-    try:
-        dob = date.fromisoformat(user.date_of_birth)
-    except (ValueError, TypeError) as e:
-        raise ValueError(f"Format date_of_birth invalide: {user.date_of_birth}") from e
 
     # Créer le patient
     patient = Patient(
         keycloak_user_id=event.user_id,
         first_name=user.first_name,
         last_name=user.last_name,
-        date_of_birth=dob,
+        date_of_birth=user.date_of_birth,
         gender=user.gender,
         email=user.email,
         phone=user.phone,

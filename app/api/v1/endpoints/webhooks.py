@@ -6,8 +6,9 @@ de Keycloak et déclenche la synchronisation vers PostgreSQL.
 
 import logging
 from datetime import datetime
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 from opentelemetry import trace
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,6 +54,7 @@ webhook_stats = {
 )
 async def receive_keycloak_webhook(
     request: Request,
+    event: Annotated[KeycloakWebhookEvent, Body()],
     db: AsyncSession = Depends(get_session),
 ) -> SyncResult:
     """
@@ -80,10 +82,7 @@ async def receive_keycloak_webhook(
             await verify_webhook_request(request)
             logger.debug("Signature webhook vérifiée")
 
-            # 2. Parser le corps de la requête
-            body = await request.json()
-            logger.info(f"Body: {body}")
-            event = KeycloakWebhookEvent(**body)
+            logger.info(f"Event payload: {event.model_dump(exclude_none=True, exclude_unset=True)}")
 
             span.set_attribute("event.type", event.event_type)
             span.set_attribute("event.user_id", event.user_id)
@@ -94,10 +93,10 @@ async def receive_keycloak_webhook(
                 f"user_id={event.user_id}, realm={event.realm_id}"
             )
 
-            # 3. Router vers le handler approprié
+            # 2. Router vers le handler approprié
             result = await _route_event(db, event)
 
-            # 4. Mettre à jour les stats
+            # 3. Mettre à jour les stats
             webhook_stats["last_event_received"] = datetime.now()
             webhook_stats["total_events_processed"] += 1
 
