@@ -51,18 +51,23 @@ async def verify_token(token: str) -> dict:
             token_info = keycloak_openid.decode_token(token, validate=True)
 
             # Validate iss (issuer) - who issued this token
-            # Must be from our Keycloak realm
-            expected_issuer = (
-                f"{settings.KEYCLOAK_SERVER_URL.rstrip('/')}/realms/{settings.KEYCLOAK_REALM}"
-            )
+            # Skip in DEBUG mode as issuer URL varies (localhost vs keycloak vs host.docker.internal)
             iss = token_info.get("iss")
-            if not iss or iss != expected_issuer:
-                logger.error(f"Invalid issuer in token: {iss}. Expected: {expected_issuer}")
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail=f"Token from unauthorized issuer: {iss}",
-                    headers={"WWW-Authenticate": "Bearer"},
+            if not settings.DEBUG:
+                # Production: Must be from our Keycloak realm
+                expected_issuer = (
+                    f"{settings.KEYCLOAK_SERVER_URL.rstrip('/')}/realms/{settings.KEYCLOAK_REALM}"
                 )
+                if not iss or iss != expected_issuer:
+                    logger.error(f"Invalid issuer in token: {iss}. Expected: {expected_issuer}")
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail=f"Token from unauthorized issuer: {iss}",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
+            else:
+                # Development: Log issuer for debugging but don't validate
+                logger.debug(f"DEBUG mode: Skipping issuer validation. Token issuer: {iss}")
 
             # Validate azp (authorized party) - who requested this token
             # Only accept tokens from our known frontend clients
