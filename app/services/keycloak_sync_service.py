@@ -127,11 +127,15 @@ async def sync_user_registration(db: AsyncSession, event: KeycloakWebhookEvent) 
                     message="User object missing in event",
                 )
 
-            # Vérifier si l'utilisateur existe déjà
+            # Vérifier si l'utilisateur existe déjà (dans Patient OU Professional)
             existing_patient = await db.execute(
                 select(Patient).where(Patient.keycloak_user_id == event.user_id)
             )
-            if existing_patient.scalar_one_or_none():
+            existing_professional = await db.execute(
+                select(Professional).where(Professional.keycloak_user_id == event.user_id)
+            )
+
+            if existing_patient.scalar_one_or_none() or existing_professional.scalar_one_or_none():
                 logger.info(f"Utilisateur déjà synchronisé: {event.user_id}")
                 return SyncResult(
                     success=True,
@@ -141,44 +145,73 @@ async def sync_user_registration(db: AsyncSession, event: KeycloakWebhookEvent) 
                     message="User already synchronized",
                 )
 
-            # Déterminer le type de profil (patient par défaut)
-            # TODO: Ajouter logique pour distinguer professional vs patient
-            user_role = "patient"  # Temporaire
+            # Déterminer le type de profil selon le client_id
+            # Si apps-africare-provider-portal → Professional
+            # Sinon (apps-africare-patient-portal ou null) → Patient
+            is_provider = event.client_id == "apps-africare-provider-portal"
 
-            if user_role == "patient":
-                patient = await _create_patient_from_event(db, event)
+            if is_provider:
+                # Créer un profil Professional
+                professional = await _create_professional_from_event(db, event)
                 await db.commit()
-                await db.refresh(patient)
+                await db.refresh(professional)
 
                 # Publier événement de création
                 await publish(
-                    "identity.patient.created",
+                    "identity.professional.created",
                     {
-                        "patient_id": patient.id,
+                        "professional_id": professional.id,
                         "keycloak_user_id": event.user_id,
-                        "email": patient.email,
+                        "email": professional.email,
+                        "client_id": event.client_id,
                         "created_at": datetime.now().isoformat(),
                     },
                 )
 
-                span.set_attribute("patient.id", patient.id)
-                logger.info(f"Patient créé depuis Keycloak: patient_id={patient.id}")
+                span.set_attribute("professional.id", professional.id)
+                span.set_attribute("client.id", event.client_id or "unknown")
+                logger.info(
+                    f"Professional créé depuis Keycloak: professional_id={professional.id}, "
+                    f"client_id={event.client_id}"
+                )
 
                 return SyncResult(
                     success=True,
                     event_type=event.event_type,
                     user_id=event.user_id,
-                    patient_id=patient.id,
-                    message=f"Patient created: {patient.id}",
+                    patient_id=professional.id,  # Utilise patient_id pour compatibilité avec le schema
+                    message=f"Professional created: {professional.id}",
                 )
 
-            # TODO: Implémenter création professional
+            # Créer un profil Patient (par défaut)
+            patient = await _create_patient_from_event(db, event)
+            await db.commit()
+            await db.refresh(patient)
+
+            # Publier événement de création
+            await publish(
+                "identity.patient.created",
+                {
+                    "patient_id": patient.id,
+                    "keycloak_user_id": event.user_id,
+                    "email": patient.email,
+                    "client_id": event.client_id,
+                    "created_at": datetime.now().isoformat(),
+                },
+            )
+
+            span.set_attribute("patient.id", patient.id)
+            span.set_attribute("client.id", event.client_id or "unknown")
+            logger.info(
+                f"Patient créé depuis Keycloak: patient_id={patient.id}, client_id={event.client_id}"
+            )
+
             return SyncResult(
-                success=False,
+                success=True,
                 event_type=event.event_type,
                 user_id=event.user_id,
-                patient_id=None,
-                message="Professional sync not implemented",
+                patient_id=patient.id,
+                message=f"Patient created: {patient.id}",
             )
 
         except Exception as e:
@@ -501,6 +534,57 @@ async def _create_patient_from_event(db: AsyncSession, event: KeycloakWebhookEve
 
     db.add(patient)
     return patient
+
+
+async def _create_professional_from_event(
+    db: AsyncSession, event: KeycloakWebhookEvent
+) -> Professional:
+    """
+    Crée un Professional depuis un événement Keycloak.
+
+    Args:
+        db: Session de base de données async
+        event: Événement webhook Keycloak
+
+    Returns:
+        Professional créé
+
+    Raises:
+        ValueError: Si données requises manquantes
+    """
+    if not event.user:
+        raise ValueError("Objet user manquant dans l'événement")
+
+    user = event.user
+
+    # Validation des champs requis
+    if not user.first_name or not user.last_name:
+        raise ValueError("first_name et last_name sont requis")
+
+    if not user.email:
+        raise ValueError("email est requis pour un professionnel")
+
+    # Créer le professionnel avec des valeurs par défaut (à compléter par l'utilisateur)
+    professional = Professional(
+        keycloak_user_id=event.user_id,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        title="Dr",  # Valeur par défaut, à compléter
+        specialty="Non spécifié",  # À compléter lors de l'onboarding
+        professional_type="other",  # À compléter lors de l'onboarding
+        email=user.email,
+        phone=user.phone or "+221000000000",  # Valeur par défaut si non fourni
+        phone_secondary=None,
+        facility_name=None,
+        qualifications=None,
+        languages_spoken=user.preferred_language or "fr",
+        is_active=False,  # Le profil doit être complété et validé par un admin
+        is_verified=False,
+        is_available=False,  # Pas disponible tant que le profil n'est pas complet
+    )
+
+    db.add(professional)
+    return professional
 
 
 ################################################################################
