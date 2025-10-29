@@ -110,6 +110,31 @@ class ProfessionalCreate(ProfessionalBase):
     )
 
 
+class ProfessionalCreateFromWebhook(ProfessionalBase):
+    """
+    Schéma pour créer un professionnel depuis un webhook Keycloak.
+
+    Usage interne uniquement. Inclut is_active pour permettre la création
+    de profils incomplets (is_active=False) qui nécessitent une complétion
+    par le professionnel et une validation par un admin.
+    """
+
+    keycloak_user_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=255,
+        description="UUID de l'utilisateur dans Keycloak",
+        examples=["a1b2c3d4-e5f6-7890-abcd-ef1234567890"],
+    )
+    professional_id: str | None = Field(
+        None, min_length=5, max_length=50, description="Numéro d'ordre professionnel (CNOM, etc.)"
+    )
+    is_active: bool = Field(
+        default=False,
+        description="Profil actif (complété et validé). Webhooks créent avec False par défaut.",
+    )
+
+
 class ProfessionalUpdate(BaseModel):
     """Schéma pour mettre à jour un professionnel existant.
 

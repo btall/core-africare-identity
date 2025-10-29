@@ -1,13 +1,14 @@
 import logging
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from keycloak import KeycloakOpenID
 from opentelemetry import trace
 from pydantic import BaseModel
 
 from app.core.config import settings
+from app.core.webhook_security import verify_webhook_request
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -299,3 +300,83 @@ async def get_current_professional(
 ) -> User:
     """Get current user with professional role validation."""
     return current_user
+
+
+async def get_admin_or_webhook(request: Request) -> dict | None:
+    """
+    Dépendance qui accepte SOIT un utilisateur admin SOIT une requête webhook valide.
+
+    Retourne:
+    - dict avec user ID si JWT admin valide
+    - None si webhook valide (pas d'utilisateur associé)
+
+    Raises:
+        HTTPException: Si ni JWT admin ni webhook valide
+    """
+    with tracer.start_as_current_span("verify_admin_or_webhook") as span:
+        # 1. Vérifier d'abord si c'est une requête webhook
+        webhook_signature = request.headers.get("X-Keycloak-Signature")
+        webhook_timestamp = request.headers.get("X-Keycloak-Timestamp")
+
+        if webhook_signature and webhook_timestamp:
+            # C'est une tentative webhook, valider la signature
+            try:
+                await verify_webhook_request(request)
+                logger.info("Requête webhook valide reçue pour création de professionnel")
+                span.set_attribute("auth.type", "webhook")
+                span.set_attribute("auth.webhook_valid", True)
+                return None  # Pas d'utilisateur pour les webhooks
+            except HTTPException as e:
+                # Signature invalide
+                logger.error(f"Signature webhook invalide: {e.detail}")
+                span.set_attribute("auth.webhook_valid", False)
+                span.set_attribute("auth.error", str(e.detail))
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=f"Signature webhook invalide: {e.detail}",
+                ) from e
+
+        # 2. Sinon, vérifier si c'est un JWT admin
+        authorization = request.headers.get("Authorization")
+        if not authorization or not authorization.startswith("Bearer "):
+            # Ni webhook ni JWT, refuser
+            logger.error("Requête sans authentification (ni webhook ni JWT)")
+            span.set_attribute("auth.error", "no_auth")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentification requise: JWT admin ou signature webhook",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        # Extraire et vérifier le token JWT
+        token = authorization.split(" ", 1)[1]
+        try:
+            token_data = await verify_token(token)
+            user_roles = token_data.get("realm_access", {}).get("roles", [])
+
+            # Vérifier que l'utilisateur a le rôle admin
+            if "admin" not in user_roles:
+                logger.error(f"Utilisateur {token_data.get('sub')} n'a pas le rôle admin")
+                span.set_attribute("auth.error", "not_admin")
+                span.set_attribute("auth.user_id", token_data.get("sub"))
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Seuls les administrateurs peuvent créer des professionnels",
+                )
+
+            # Utilisateur admin valide
+            logger.info(f"Admin authentifié: {token_data.get('sub')}")
+            span.set_attribute("auth.type", "admin_jwt")
+            span.set_attribute("auth.user_id", token_data.get("sub"))
+            span.set_attribute("auth.admin_valid", True)
+            return token_data
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Erreur lors de la vérification du token: {e}")
+            span.set_attribute("auth.error", str(e))
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token invalide",
+                headers={"WWW-Authenticate": "Bearer"},
+            ) from e

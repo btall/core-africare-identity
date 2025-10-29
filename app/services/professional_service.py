@@ -14,6 +14,7 @@ from app.core.events import publish
 from app.models.professional import Professional
 from app.schemas.professional import (
     ProfessionalCreate,
+    ProfessionalCreateFromWebhook,
     ProfessionalListItem,
     ProfessionalSearchFilters,
     ProfessionalUpdate,
@@ -24,16 +25,16 @@ tracer = trace.get_tracer(__name__)
 
 async def create_professional(
     db: AsyncSession,
-    professional_data: ProfessionalCreate,
-    current_user_id: str,
+    professional_data: ProfessionalCreate | ProfessionalCreateFromWebhook,
+    current_user_id: str | None,
 ) -> Professional:
     """
     Crée un nouveau professionnel dans la base de données.
 
     Args:
         db: Session de base de données async
-        professional_data: Données du professionnel à créer
-        current_user_id: ID Keycloak de l'utilisateur créateur
+        professional_data: Données du professionnel à créer (ProfessionalCreate ou ProfessionalCreateFromWebhook)
+        current_user_id: ID Keycloak de l'utilisateur créateur (None pour webhooks)
 
     Returns:
         Professional créé avec son ID
@@ -43,8 +44,12 @@ async def create_professional(
     """
     with tracer.start_as_current_span("create_professional") as span:
         span.set_attribute("professional.keycloak_user_id", professional_data.keycloak_user_id)
+        span.set_attribute(
+            "professional.is_webhook_create",
+            isinstance(professional_data, ProfessionalCreateFromWebhook),
+        )
 
-        # Créer le professionnel
+        # Créer le professionnel directement depuis les données Pydantic
         professional = Professional(
             **professional_data.model_dump(),
             created_by=current_user_id,

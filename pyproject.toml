@@ -9,6 +9,7 @@ packages = [{include = "app"}]
 [tool.poetry.dependencies]
 python = ">=3.13,<3.14"
 # PostgreSQL dependencies
+alembic = "^1.16.5"
 asyncpg = "^0.30.0"
 sqlalchemy = "^2.0.0"
 fastapi = "^0.118.0"

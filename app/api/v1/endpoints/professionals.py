@@ -9,9 +9,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.security import get_current_user
+from app.core.security import get_admin_or_webhook, get_current_user
 from app.schemas.professional import (
     ProfessionalCreate,
+    ProfessionalCreateFromWebhook,
     ProfessionalListResponse,
     ProfessionalResponse,
     ProfessionalSearchFilters,
@@ -27,30 +28,42 @@ router = APIRouter()
     response_model=ProfessionalResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Créer un nouveau professionnel de santé",
-    description="Crée un nouveau profil professionnel dans le système",
+    description="Crée un nouveau profil professionnel dans le système (admin ou webhook Keycloak)",
 )
 async def create_professional(
     professional: ProfessionalCreate,
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    auth_data: dict | None = Depends(get_admin_or_webhook),
 ) -> ProfessionalResponse:
     """
     Crée un nouveau professionnel de santé.
 
-    Permissions requises : role 'admin'
+    Permissions requises :
+    - JWT avec rôle 'admin' (création manuelle par admin)
+    - Signature webhook valide (création automatique lors de l'enregistrement Keycloak)
+
+    Comportement selon l'origine :
+    - Webhook: Crée le profil avec is_active=False (profil incomplet, à compléter par le professionnel)
+    - Admin: Peut spécifier is_active selon validation manuelle
     """
-    # Vérifier le rôle admin
-    if "admin" not in current_user.get("realm_access", {}).get("roles", []):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Seuls les administrateurs peuvent créer des professionnels",
+    # Déterminer si c'est un webhook ou un admin
+    is_webhook = auth_data is None
+    current_user_id = None if is_webhook else auth_data["sub"]
+
+    # Si webhook, créer un ProfessionalCreateFromWebhook avec is_active=False
+    if is_webhook:
+        professional_data = ProfessionalCreateFromWebhook(
+            **professional.model_dump(),
+            is_active=False,  # Profil incomplet par défaut pour webhooks
         )
+    else:
+        professional_data = professional
 
     try:
         created_professional = await professional_service.create_professional(
             db=db,
-            professional_data=professional,
-            current_user_id=current_user["sub"],
+            professional_data=professional_data,
+            current_user_id=current_user_id,
         )
         return ProfessionalResponse.model_validate(created_professional)
     except IntegrityError as e:
