@@ -4,10 +4,11 @@ from datetime import date
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.patient import Patient
-from app.schemas.keycloak import KeycloakEventDetails, KeycloakWebhookEvent
+from app.schemas.keycloak import KeycloakUser, KeycloakWebhookEvent
 from app.services.keycloak_sync_service import (
     _create_patient_from_event,
     sync_email_update,
@@ -23,7 +24,13 @@ def mock_db_session():
     session = AsyncMock(spec=AsyncSession)
     session.execute = AsyncMock()
     session.commit = AsyncMock()
-    session.refresh = AsyncMock()
+
+    # Mock refresh pour assigner un ID au patient
+    async def mock_refresh(obj):
+        if hasattr(obj, "id") and obj.id is None:
+            obj.id = 42  # ID simulé
+
+    session.refresh = AsyncMock(side_effect=mock_refresh)
     session.rollback = AsyncMock()
     session.add = MagicMock()
     return session
@@ -35,13 +42,13 @@ def sample_register_event():
     import time as time_module
 
     return KeycloakWebhookEvent(
-        type="REGISTER",
+        event_type="REGISTER",
         realmId="africare",
         clientId="core-africare-identity",
         userId="test-user-123",
         ipAddress="192.168.1.1",
         sessionId="session-uuid",
-        details=KeycloakEventDetails(
+        user=KeycloakUser(
             username="amadou.diallo",
             email="amadou.diallo@example.sn",
             first_name="Amadou",
@@ -52,7 +59,7 @@ def sample_register_event():
             country="Sénégal",
             preferred_language="fr",
         ),
-        time=int(time_module.time() * 1000),  # Timestamp actuel en millisecondes
+        event_time=int(time_module.time() * 1000),  # Timestamp actuel en millisecondes
     )
 
 
@@ -62,18 +69,18 @@ def sample_update_profile_event():
     import time as time_module
 
     return KeycloakWebhookEvent(
-        type="UPDATE_PROFILE",
+        event_type="UPDATE_PROFILE",
         realmId="africare",
         clientId="core-africare-identity",
         userId="test-user-123",
         ipAddress="192.168.1.1",
         sessionId="session-uuid",
-        details=KeycloakEventDetails(
+        user=KeycloakUser(
             first_name="Amadou Updated",
             last_name="Diallo Updated",
             phone="+221771234999",
         ),
-        time=int(time_module.time() * 1000),
+        event_time=int(time_module.time() * 1000),
     )
 
 
@@ -83,17 +90,17 @@ def sample_update_email_event():
     import time as time_module
 
     return KeycloakWebhookEvent(
-        type="UPDATE_EMAIL",
+        event_type="UPDATE_EMAIL",
         realmId="africare",
         clientId="core-africare-identity",
         userId="test-user-123",
         ipAddress="192.168.1.1",
         sessionId="session-uuid",
-        details=KeycloakEventDetails(
+        user=KeycloakUser(
             email="new.email@example.sn",
             email_verified=True,
         ),
-        time=int(time_module.time() * 1000),
+        event_time=int(time_module.time() * 1000),
     )
 
 
@@ -103,14 +110,14 @@ def sample_login_event():
     import time as time_module
 
     return KeycloakWebhookEvent(
-        type="LOGIN",
+        event_type="LOGIN",
         realmId="africare",
         clientId="core-africare-identity",
         userId="test-user-123",
         ipAddress="192.168.1.1",
         sessionId="session-uuid",
-        details=KeycloakEventDetails(),
-        time=int(time_module.time() * 1000),
+        user=KeycloakUser(),
+        event_time=int(time_module.time() * 1000),
     )
 
 
@@ -139,15 +146,15 @@ class TestCreatePatientFromEvent:
     async def test_create_patient_missing_first_name(self, mock_db_session):
         """Test création patient sans prénom (erreur)."""
         event = KeycloakWebhookEvent(
-            type="REGISTER",
+            event_type="REGISTER",
             realmId="africare",
             userId="test-user",
-            details=KeycloakEventDetails(
+            user=KeycloakUser(
                 last_name="Diallo",
                 date_of_birth="1990-05-15",
                 gender="male",
             ),
-            time=int(__import__("time").time() * 1000),
+            event_time=int(__import__("time").time() * 1000),
         )
 
         with pytest.raises(ValueError, match="first_name et last_name sont requis"):
@@ -157,15 +164,15 @@ class TestCreatePatientFromEvent:
     async def test_create_patient_missing_date_of_birth(self, mock_db_session):
         """Test création patient sans date de naissance (erreur)."""
         event = KeycloakWebhookEvent(
-            type="REGISTER",
+            event_type="REGISTER",
             realmId="africare",
             userId="test-user",
-            details=KeycloakEventDetails(
+            user=KeycloakUser(
                 first_name="Amadou",
                 last_name="Diallo",
                 gender="male",
             ),
-            time=int(__import__("time").time() * 1000),
+            event_time=int(__import__("time").time() * 1000),
         )
 
         with pytest.raises(ValueError, match="date_of_birth est requis"):
@@ -173,36 +180,29 @@ class TestCreatePatientFromEvent:
 
     @pytest.mark.asyncio
     async def test_create_patient_invalid_date_format(self, mock_db_session):
-        """Test création patient avec format de date invalide."""
-        event = KeycloakWebhookEvent(
-            type="REGISTER",
-            realmId="africare",
-            userId="test-user",
-            details=KeycloakEventDetails(
+        """Test création patient avec format de date invalide (validé par Pydantic)."""
+        # Pydantic valide immédiatement le format de la date
+        with pytest.raises(ValidationError):
+            KeycloakUser(
                 first_name="Amadou",
                 last_name="Diallo",
                 date_of_birth="15/05/1990",  # Format invalide
                 gender="male",
-            ),
-            time=int(__import__("time").time() * 1000),
-        )
-
-        with pytest.raises(ValueError, match="Format date_of_birth invalide"):
-            await _create_patient_from_event(mock_db_session, event)
+            )
 
     @pytest.mark.asyncio
     async def test_create_patient_missing_gender(self, mock_db_session):
         """Test création patient sans genre (erreur)."""
         event = KeycloakWebhookEvent(
-            type="REGISTER",
+            event_type="REGISTER",
             realmId="africare",
             userId="test-user",
-            details=KeycloakEventDetails(
+            user=KeycloakUser(
                 first_name="Amadou",
                 last_name="Diallo",
                 date_of_birth="1990-05-15",
             ),
-            time=int(__import__("time").time() * 1000),
+            event_time=int(__import__("time").time() * 1000),
         )
 
         with pytest.raises(ValueError, match="gender est requis"):
@@ -326,18 +326,18 @@ class TestSyncProfileUpdate:
         result = await sync_profile_update(mock_db_session, sample_update_profile_event)
 
         assert result.success is False
-        assert "Patient not found" in result.message
+        assert "Patient or Professional not found" in result.message
         mock_db_session.commit.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_sync_profile_update_no_changes(self, mock_db_session):
         """Test UPDATE_PROFILE sans changements."""
         event = KeycloakWebhookEvent(
-            type="UPDATE_PROFILE",
+            event_type="UPDATE_PROFILE",
             realmId="africare",
             userId="test-user-123",
-            details=KeycloakEventDetails(),  # Pas de champs à mettre à jour
-            time=int(__import__("time").time() * 1000),
+            user=KeycloakUser(),  # Pas de champs à mettre à jour
+            event_time=int(__import__("time").time() * 1000),
         )
 
         existing_patient = Patient(
@@ -410,11 +410,11 @@ class TestSyncEmailUpdate:
     async def test_sync_email_update_missing_email(self, mock_db_session):
         """Test UPDATE_EMAIL sans email dans l'événement."""
         event = KeycloakWebhookEvent(
-            type="UPDATE_EMAIL",
+            event_type="UPDATE_EMAIL",
             realmId="africare",
             userId="test-user-123",
-            details=KeycloakEventDetails(),  # Email manquant
-            time=int(__import__("time").time() * 1000),
+            user=KeycloakUser(),  # Email manquant
+            event_time=int(__import__("time").time() * 1000),
         )
 
         existing_patient = Patient(id=42, keycloak_user_id="test-user-123")
