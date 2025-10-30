@@ -259,62 +259,81 @@ async def sync_profile_update(db: AsyncSession, event: KeycloakWebhookEvent) -> 
                     message="User object missing in event",
                 )
 
-            # Chercher le patient
+            # Chercher d'abord dans Patient
             result = await db.execute(
                 select(Patient).where(Patient.keycloak_user_id == event.user_id)
             )
             patient = result.scalar_one_or_none()
 
+            # Si pas trouvé dans Patient, chercher dans Professional
+            professional = None
             if not patient:
-                logger.warning(f"Patient non trouvé pour user_id: {event.user_id}")
+                result = await db.execute(
+                    select(Professional).where(Professional.keycloak_user_id == event.user_id)
+                )
+                professional = result.scalar_one_or_none()
+
+            # Si ni Patient ni Professional trouvé, retourner erreur
+            if not patient and not professional:
+                logger.warning(
+                    f"Aucun Patient ou Professional trouvé pour user_id: {event.user_id}"
+                )
                 return SyncResult(
                     success=False,
                     event_type=event.event_type,
                     user_id=event.user_id,
                     patient_id=None,
-                    message="Patient not found",
+                    message="Patient or Professional not found",
                 )
+
+            # Déterminer le profil à mettre à jour
+            profile = patient if patient else professional
+            profile_type = "patient" if patient else "professional"
 
             # Mettre à jour les champs
             updated_fields = []
-            if event.user.first_name and event.user.first_name != patient.first_name:
-                patient.first_name = event.user.first_name
+            if event.user.first_name and event.user.first_name != profile.first_name:
+                profile.first_name = event.user.first_name
                 updated_fields.append("first_name")
 
-            if event.user.last_name and event.user.last_name != patient.last_name:
-                patient.last_name = event.user.last_name
+            if event.user.last_name and event.user.last_name != profile.last_name:
+                profile.last_name = event.user.last_name
                 updated_fields.append("last_name")
 
-            if event.user.phone and event.user.phone != patient.phone:
-                patient.phone = event.user.phone
+            if event.user.phone and event.user.phone != profile.phone:
+                profile.phone = event.user.phone
                 updated_fields.append("phone")
 
             if updated_fields:
-                patient.updated_at = datetime.now()
+                profile.updated_at = datetime.now()
                 await db.commit()
-                await db.refresh(patient)
+                await db.refresh(profile)
 
-                # Publier événement de mise à jour
+                # Publier événement de mise à jour selon le type
+                event_subject = f"identity.{profile_type}.updated"
                 await publish(
-                    "identity.patient.updated",
+                    event_subject,
                     {
-                        "patient_id": patient.id,
+                        f"{profile_type}_id": profile.id,
                         "keycloak_user_id": event.user_id,
                         "updated_fields": updated_fields,
                         "updated_at": datetime.now().isoformat(),
                     },
                 )
 
-                logger.info(f"Patient mis à jour: patient_id={patient.id}, fields={updated_fields}")
+                logger.info(
+                    f"{profile_type.capitalize()} mis à jour: {profile_type}_id={profile.id}, "
+                    f"fields={updated_fields}"
+                )
 
-            span.set_attribute("patient.id", patient.id)
+            span.set_attribute(f"{profile_type}.id", profile.id)
             span.set_attribute("updated_fields", str(updated_fields))
 
             return SyncResult(
                 success=True,
                 event_type=event.event_type,
                 user_id=event.user_id,
-                patient_id=patient.id,
+                patient_id=profile.id,
                 message=f"Updated fields: {updated_fields}" if updated_fields else "No changes",
             )
 
