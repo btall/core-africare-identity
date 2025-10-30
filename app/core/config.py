@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     API_LATEST_VERSION: str = "v1"
 
     # Environnement
-    ENVIRONMENT: Literal["development", "staging", "production"] = "development"
+    ENVIRONMENT: Literal["development", "staging", "production", "test"] = "development"
     DEBUG: bool = False
 
     # JWT (si nécessaire pour l'authentification)
@@ -102,10 +102,6 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: ConfigurableList = []
     # Définir dans .env, ex: TRUSTED_HOSTS='["localhost","127.0.0.1"]'
     TRUSTED_HOSTS: ConfigurableList = ["localhost", "127.0.0.1"]
-
-    # Webhook Configuration
-    WEBHOOK_SECRET: str  # Secret partagé pour vérifier la signature des webhooks Keycloak
-    WEBHOOK_SIGNATURE_TOLERANCE: int = 300  # Tolérance timestamp en secondes (5 min)
 
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod

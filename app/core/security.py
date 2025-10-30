@@ -1,7 +1,7 @@
 import logging
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from keycloak import KeycloakOpenID
 from opentelemetry import trace
@@ -101,20 +101,10 @@ async def verify_token(token: str) -> dict:
                     headers={"WWW-Authenticate": "Bearer"},
                 )
 
-            # Enrichir le span avec toutes les informations utilisateur disponibles
             span.set_attribute("auth.user_id", token_info.get("sub"))
             span.set_attribute("auth.iss", iss)
             span.set_attribute("auth.azp", azp)
             span.set_attribute("auth.aud", str(aud))
-
-            # Ajouter les informations personnelles de l'utilisateur
-            span.set_attribute("user.keycloak_id", token_info.get("sub", ""))
-            span.set_attribute("user.email", token_info.get("email", ""))
-            span.set_attribute("user.email_verified", token_info.get("email_verified", False))
-            span.set_attribute("user.username", token_info.get("preferred_username", ""))
-            span.set_attribute("user.given_name", token_info.get("given_name", ""))
-            span.set_attribute("user.family_name", token_info.get("family_name", ""))
-            span.set_attribute("user.name", token_info.get("name", ""))  # Nom complet
 
             logger.debug(
                 f"Token validated successfully - iss: {iss}, azp: {azp}, aud: {aud}, user: {token_info.get('sub')}"
@@ -131,53 +121,72 @@ async def verify_token(token: str) -> dict:
             ) from e
 
 
-async def get_token_data(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security_scheme)],
-) -> dict:
-    """Extract and verify token from HTTP Bearer credentials."""
-    return await verify_token(credentials.credentials)
-
-
-async def get_current_user(token_data: Annotated[dict, Depends(get_token_data)]) -> dict:
+async def extract_token(
+    request: Request,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security_scheme)] = None,
+) -> str:
     """
-    Get current user from verified Keycloak token.
+    Extract JWT token from multiple sources (for SSE and HTTP compatibility).
 
-    Returns raw token data dict for convenience in endpoints.
-    For structured User model, use get_current_user_model().
+    Token extraction priority:
+    1. Authorization header: Bearer <token> (standard for HTTP requests)
+    2. Query parameter: ?token=<token> (for SSE/EventSource)
+    3. Cookie: auth_token (alternative for SSE)
+
+    This multi-source approach enables:
+    - Standard HTTP requests: Use Authorization header (interceptor-compatible)
+    - SSE connections: Use query parameter (EventSource limitation)
+    - Cookie-based auth: Use cookie (alternative for browsers)
+
+    Args:
+        request: FastAPI Request object
+        credentials: HTTPAuthorizationCredentials from Bearer scheme (optional)
+
+    Returns:
+        JWT token string
+
+    Raises:
+        HTTPException: If no token found in any source
     """
+    # Source 1: Authorization header (Bearer token)
+    if credentials:
+        logger.debug("Token extracted from Authorization header")
+        return credentials.credentials
+
+    # Source 2: Query parameter (?token=<jwt>)
+    token = request.query_params.get("token")
+    if token:
+        logger.debug("Token extracted from query parameter")
+        return token
+
+    # Source 3: Cookie (auth_token)
+    token = request.cookies.get("auth_token")
+    if token:
+        logger.debug("Token extracted from cookie")
+        return token
+
+    # No token found in any source
+    logger.warning("No authentication token found in request")
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required. Provide token via Authorization header, query parameter, or cookie.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+async def get_token_data(token: Annotated[str, Depends(extract_token)]) -> dict:
+    """Extract and verify token from multiple sources."""
+    return await verify_token(token)
+
+
+async def get_current_user(token_data: Annotated[dict, Depends(get_token_data)]) -> User:
+    """Get current user from verified Keycloak token."""
     with tracer.start_as_current_span("get_current_user") as span:
-        # Enrichir le span avec toutes les informations utilisateur
-        span.set_attribute("user.keycloak_id", token_data.get("sub", ""))
-        span.set_attribute("user.email", token_data.get("email", ""))
-        span.set_attribute("user.username", token_data.get("preferred_username", ""))
-        span.set_attribute("user.given_name", token_data.get("given_name", ""))
-        span.set_attribute("user.family_name", token_data.get("family_name", ""))
-        span.set_attribute("user.name", token_data.get("name", ""))
-
-        logger.info(
-            f"User authenticated: {token_data.get('sub')} - "
-            f"{token_data.get('name', token_data.get('preferred_username', 'Unknown'))}"
-        )
-        return token_data
-
-
-async def get_current_user_model(token_data: Annotated[dict, Depends(get_token_data)]) -> User:
-    """Get current user as Pydantic User model from verified Keycloak token."""
-    with tracer.start_as_current_span("get_current_user_model") as span:
         try:
             user = User(**token_data)
-            # Enrichir le span avec toutes les informations utilisateur
-            span.set_attribute("user.keycloak_id", user.sub)
-            span.set_attribute("user.email", user.email or "")
-            span.set_attribute("user.username", user.preferred_username or "")
-            span.set_attribute("user.given_name", user.given_name or "")
-            span.set_attribute("user.family_name", user.family_name or "")
-            span.set_attribute("user.name", user.name or "")
-
-            logger.info(
-                f"User authenticated: {user.sub} - "
-                f"{user.name or user.preferred_username or 'Unknown'}"
-            )
+            span.set_attribute("auth.user_id", user.sub)
+            span.set_attribute("auth.username", user.preferred_username or "unknown")
+            logger.info(f"User authenticated: {user.sub}")
             return user
         except Exception as e:
             logger.error(f"Failed to create user from token data: {e}")
@@ -227,7 +236,7 @@ def require_roles(*roles: str, require_all: bool = False):
         @router.get("/patient-only", dependencies=[Depends(require_roles("patient"))])
     """
 
-    async def role_checker(current_user: User = Depends(get_current_user_model)) -> User:
+    async def role_checker(current_user: User = Depends(get_current_user)) -> User:
         with tracer.start_as_current_span("check_user_roles") as span:
             span.set_attribute("auth.required_roles", ",".join(roles))
             span.set_attribute("auth.require_all", require_all)
