@@ -72,7 +72,7 @@ def event_loop():
     loop.close()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 async def test_engine():
     """
     Crée le moteur SQLAlchemy de test.
@@ -121,7 +121,7 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
 # ============================================================================
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 async def test_redis_client():
     """
     Crée le client Redis de test.
