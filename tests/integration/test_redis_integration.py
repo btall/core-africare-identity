@@ -161,12 +161,12 @@ async def test_redis_set_operations(redis_client: Redis):
     assert "patient-2" in members
     assert "patient-3" in members
 
-    # SISMEMBER (vérifier appartenance)
+    # SISMEMBER (vérifier appartenance) - Redis renvoie 1 ou 0, pas True/False
     is_member = await redis_client.sismember("active_patients", "patient-1")
-    assert is_member is True
+    assert is_member == 1  # Redis renvoie 1 pour True
 
     is_not_member = await redis_client.sismember("active_patients", "patient-999")
-    assert is_not_member is False
+    assert is_not_member == 0  # Redis renvoie 0 pour False
 
 
 @pytest.mark.integration
