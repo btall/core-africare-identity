@@ -448,9 +448,6 @@ async def _process_webhook_message(message_id: str, message_data: dict):
         "messaging.destination": WEBHOOK_STREAM_NAME,
         "messaging.message.id": message_id,
         "event.type": message_data.get("event_type"),
-        # Lier au trace original du webhook
-        "original.trace_id": original_trace_id,
-        "original.parent_span_id": parent_span_id,
         # Informations utilisateur depuis le message stocké
         "user.keycloak_id": message_data.get("user_id", ""),
         "user.email": message_data.get("user_email", ""),
@@ -458,6 +455,12 @@ async def _process_webhook_message(message_id: str, message_data: dict):
         "user.last_name": message_data.get("user_last_name", ""),
         "user.username": message_data.get("user_username", ""),
     }
+
+    # Ajouter les attributs de trace uniquement s'ils sont présents (OpenTelemetry n'accepte pas None)
+    if original_trace_id:
+        span_attributes["original.trace_id"] = original_trace_id
+    if parent_span_id:
+        span_attributes["original.parent_span_id"] = parent_span_id
 
     with tracer.start_as_current_span(
         "process_webhook_message", kind=trace.SpanKind.CONSUMER, attributes=span_attributes
