@@ -37,25 +37,31 @@ def client(app):
 @pytest.fixture
 def valid_webhook_payload():
     """Fixture pour un payload webhook valide."""
+    import time
+
+    current_time_ms = int(time.time() * 1000)
+
     return {
-        "type": "REGISTER",
+        "eventType": "REGISTER",
         "realmId": "africare",
         "clientId": "core-africare-identity",
         "userId": "test-user-123",
         "ipAddress": "192.168.1.1",
         "sessionId": "session-uuid",
-        "details": {
+        "user": {
             "username": "amadou.diallo",
             "email": "amadou.diallo@example.sn",
-            "first_name": "Amadou",
-            "last_name": "Diallo",
-            "date_of_birth": "1990-05-15",
+            "firstName": "Amadou",
+            "lastName": "Diallo",
+            "dateOfBirth": "1990-05-15",
             "gender": "male",
             "phone": "+221771234567",
             "country": "Sénégal",
-            "preferred_language": "fr",
+            "preferredLanguage": "fr",
+            "emailVerified": True,
+            "enabled": True,
         },
-        "time": 1234567890000,
+        "eventTime": current_time_ms,
     }
 
 
@@ -91,18 +97,10 @@ class TestReceiveKeycloakWebhook:
         with patch("app.core.config.settings.WEBHOOK_SECRET", webhook_secret):
             with patch("app.core.config.settings.WEBHOOK_SIGNATURE_TOLERANCE", 300):
                 with patch(
-                    "app.services.keycloak_sync_service.sync_user_registration",
+                    "app.api.v1.endpoints.webhooks.add_webhook_event",
                     new_callable=AsyncMock,
-                ) as mock_sync:
-                    from app.schemas.keycloak import SyncResult
-
-                    mock_sync.return_value = SyncResult(
-                        success=True,
-                        event_type="REGISTER",
-                        user_id="test-user-123",
-                        patient_id=42,
-                        message="Patient created: 42",
-                    )
+                ) as mock_add:
+                    mock_add.return_value = "test-message-id-123"
 
                     response = client.post(
                         "/api/v1/webhooks/keycloak",
@@ -110,12 +108,12 @@ class TestReceiveKeycloakWebhook:
                         headers=headers,
                     )
 
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
-        assert data["success"] is True
+        assert data["accepted"] is True
         assert data["event_type"] == "REGISTER"
         assert data["user_id"] == "test-user-123"
-        assert data["patient_id"] == 42
+        assert data["message_id"] == "test-message-id-123"
 
     def test_receive_webhook_missing_signature_header(
         self, client, valid_webhook_payload, webhook_secret
@@ -137,7 +135,7 @@ class TestReceiveKeycloakWebhook:
             )
 
         assert response.status_code == 400
-        assert "X-Keycloak-Signature header missing" in response.json()["detail"]
+        assert "Missing X-Keycloak-Signature header" in response.json()["detail"]
 
     def test_receive_webhook_missing_timestamp_header(
         self, client, valid_webhook_payload, webhook_secret
@@ -159,7 +157,7 @@ class TestReceiveKeycloakWebhook:
             )
 
         assert response.status_code == 400
-        assert "X-Keycloak-Timestamp header missing" in response.json()["detail"]
+        assert "Missing X-Keycloak-Timestamp header" in response.json()["detail"]
 
     def test_receive_webhook_invalid_signature(self, client, valid_webhook_payload, webhook_secret):
         """Test webhook avec signature invalide."""
@@ -212,13 +210,15 @@ class TestReceiveKeycloakWebhook:
     def test_receive_webhook_invalid_event_type(self, client, webhook_secret):
         """Test webhook avec type d'événement non supporté."""
         import json
+        import time
 
+        current_time_ms = int(time.time() * 1000)
         payload = {
-            "type": "UNSUPPORTED_EVENT",
+            "eventType": "UNSUPPORTED_EVENT",
             "realmId": "africare",
             "userId": "test-user-123",
-            "time": 1234567890000,
-            "details": {},
+            "eventTime": current_time_ms,
+            "user": {},
         }
         payload_json = json.dumps(payload)
         headers = create_valid_headers(payload_json, webhook_secret)
@@ -237,15 +237,20 @@ class TestReceiveKeycloakWebhook:
     def test_receive_webhook_update_profile(self, client, webhook_secret):
         """Test webhook UPDATE_PROFILE."""
         import json
+        import time
 
+        current_time_ms = int(time.time() * 1000)
         payload = {
-            "type": "UPDATE_PROFILE",
+            "eventType": "UPDATE_PROFILE",
             "realmId": "africare",
             "userId": "test-user-123",
-            "time": 1234567890000,
-            "details": {
-                "first_name": "Amadou Updated",
-                "last_name": "Diallo Updated",
+            "eventTime": current_time_ms,
+            "user": {
+                "firstName": "Amadou Updated",
+                "lastName": "Diallo Updated",
+                "email": "amadou@example.sn",
+                "emailVerified": True,
+                "enabled": True,
             },
         }
         payload_json = json.dumps(payload)
@@ -254,18 +259,10 @@ class TestReceiveKeycloakWebhook:
         with patch("app.core.config.settings.WEBHOOK_SECRET", webhook_secret):
             with patch("app.core.config.settings.WEBHOOK_SIGNATURE_TOLERANCE", 300):
                 with patch(
-                    "app.services.keycloak_sync_service.sync_profile_update",
+                    "app.api.v1.endpoints.webhooks.add_webhook_event",
                     new_callable=AsyncMock,
-                ) as mock_sync:
-                    from app.schemas.keycloak import SyncResult
-
-                    mock_sync.return_value = SyncResult(
-                        success=True,
-                        event_type="UPDATE_PROFILE",
-                        user_id="test-user-123",
-                        patient_id=42,
-                        message="Updated fields: ['first_name', 'last_name']",
-                    )
+                ) as mock_add:
+                    mock_add.return_value = "test-message-id-123"
 
                     response = client.post(
                         "/api/v1/webhooks/keycloak",
@@ -273,23 +270,27 @@ class TestReceiveKeycloakWebhook:
                         headers=headers,
                     )
 
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
-        assert data["success"] is True
+        assert data["accepted"] is True
         assert data["event_type"] == "UPDATE_PROFILE"
+        assert data["user_id"] == "test-user-123"
 
     def test_receive_webhook_update_email(self, client, webhook_secret):
         """Test webhook UPDATE_EMAIL."""
         import json
+        import time
 
+        current_time_ms = int(time.time() * 1000)
         payload = {
-            "type": "UPDATE_EMAIL",
+            "eventType": "UPDATE_EMAIL",
             "realmId": "africare",
             "userId": "test-user-123",
-            "time": 1234567890000,
-            "details": {
+            "eventTime": current_time_ms,
+            "user": {
                 "email": "new.email@example.sn",
-                "email_verified": True,
+                "emailVerified": True,
+                "enabled": True,
             },
         }
         payload_json = json.dumps(payload)
@@ -298,18 +299,10 @@ class TestReceiveKeycloakWebhook:
         with patch("app.core.config.settings.WEBHOOK_SECRET", webhook_secret):
             with patch("app.core.config.settings.WEBHOOK_SIGNATURE_TOLERANCE", 300):
                 with patch(
-                    "app.services.keycloak_sync_service.sync_email_update",
+                    "app.api.v1.endpoints.webhooks.add_webhook_event",
                     new_callable=AsyncMock,
-                ) as mock_sync:
-                    from app.schemas.keycloak import SyncResult
-
-                    mock_sync.return_value = SyncResult(
-                        success=True,
-                        event_type="UPDATE_EMAIL",
-                        user_id="test-user-123",
-                        patient_id=42,
-                        message="Email updated",
-                    )
+                ) as mock_add:
+                    mock_add.return_value = "test-message-id-123"
 
                     response = client.post(
                         "/api/v1/webhooks/keycloak",
@@ -317,23 +310,26 @@ class TestReceiveKeycloakWebhook:
                         headers=headers,
                     )
 
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
-        assert data["success"] is True
+        assert data["accepted"] is True
         assert data["event_type"] == "UPDATE_EMAIL"
+        assert data["user_id"] == "test-user-123"
 
     def test_receive_webhook_login(self, client, webhook_secret):
         """Test webhook LOGIN."""
         import json
+        import time
 
+        current_time_ms = int(time.time() * 1000)
         payload = {
-            "type": "LOGIN",
+            "eventType": "LOGIN",
             "realmId": "africare",
             "userId": "test-user-123",
             "ipAddress": "192.168.1.1",
             "sessionId": "session-uuid",
-            "time": 1234567890000,
-            "details": {},
+            "eventTime": current_time_ms,
+            "user": None,
         }
         payload_json = json.dumps(payload)
         headers = create_valid_headers(payload_json, webhook_secret)
@@ -341,18 +337,10 @@ class TestReceiveKeycloakWebhook:
         with patch("app.core.config.settings.WEBHOOK_SECRET", webhook_secret):
             with patch("app.core.config.settings.WEBHOOK_SIGNATURE_TOLERANCE", 300):
                 with patch(
-                    "app.services.keycloak_sync_service.track_user_login",
+                    "app.api.v1.endpoints.webhooks.add_webhook_event",
                     new_callable=AsyncMock,
-                ) as mock_track:
-                    from app.schemas.keycloak import SyncResult
-
-                    mock_track.return_value = SyncResult(
-                        success=True,
-                        event_type="LOGIN",
-                        user_id="test-user-123",
-                        patient_id=None,
-                        message="Login tracked",
-                    )
+                ) as mock_add:
+                    mock_add.return_value = "test-message-id-123"
 
                     response = client.post(
                         "/api/v1/webhooks/keycloak",
@@ -360,10 +348,11 @@ class TestReceiveKeycloakWebhook:
                         headers=headers,
                     )
 
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
-        assert data["success"] is True
+        assert data["accepted"] is True
         assert data["event_type"] == "LOGIN"
+        assert data["user_id"] == "test-user-123"
 
 
 class TestWebhookHealthCheck:
@@ -371,10 +360,11 @@ class TestWebhookHealthCheck:
 
     def test_health_check_no_events(self, client):
         """Test health check sans événements traités."""
-        # Réinitialiser les stats
+        # Réinitialiser les stats avec les bons noms de clés
         webhook_stats["last_event_received"] = None
-        webhook_stats["total_events_processed"] = 0
-        webhook_stats["failed_events_count"] = 0
+        webhook_stats["total_events_received"] = 0
+        webhook_stats["total_events_persisted"] = 0
+        webhook_stats["failed_to_persist_count"] = 0
 
         response = client.get("/api/v1/webhooks/keycloak/health")
 
@@ -386,8 +376,11 @@ class TestWebhookHealthCheck:
 
     def test_health_check_healthy_status(self, client):
         """Test health check avec statut healthy (< 10% échecs)."""
-        webhook_stats["total_events_processed"] = 100
-        webhook_stats["failed_events_count"] = 5  # 5%
+        # Réinitialiser toutes les stats pour isolation
+        webhook_stats["last_event_received"] = None
+        webhook_stats["total_events_received"] = 100
+        webhook_stats["total_events_persisted"] = 100
+        webhook_stats["failed_to_persist_count"] = 5  # 5%
 
         response = client.get("/api/v1/webhooks/keycloak/health")
 
@@ -399,8 +392,11 @@ class TestWebhookHealthCheck:
 
     def test_health_check_degraded_status(self, client):
         """Test health check avec statut degraded (10-50% échecs)."""
-        webhook_stats["total_events_processed"] = 100
-        webhook_stats["failed_events_count"] = 30  # 30%
+        # Réinitialiser toutes les stats pour isolation
+        webhook_stats["last_event_received"] = None
+        webhook_stats["total_events_received"] = 100
+        webhook_stats["total_events_persisted"] = 100
+        webhook_stats["failed_to_persist_count"] = 30  # 30%
 
         response = client.get("/api/v1/webhooks/keycloak/health")
 
@@ -410,8 +406,11 @@ class TestWebhookHealthCheck:
 
     def test_health_check_unhealthy_status(self, client):
         """Test health check avec statut unhealthy (> 50% échecs)."""
-        webhook_stats["total_events_processed"] = 100
-        webhook_stats["failed_events_count"] = 60  # 60%
+        # Réinitialiser toutes les stats pour isolation
+        webhook_stats["last_event_received"] = None
+        webhook_stats["total_events_received"] = 100
+        webhook_stats["total_events_persisted"] = 100
+        webhook_stats["failed_to_persist_count"] = 60  # 60%
 
         response = client.get("/api/v1/webhooks/keycloak/health")
 
