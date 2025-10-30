@@ -506,6 +506,10 @@ async def _process_webhook_message(message_id: str, message_data: dict):
             # Créer une session DB pour le traitement
             async with async_session_maker() as db:
                 # Appeler le handler
+                logger.info(
+                    f"Traitement webhook message: id={message_id}, "
+                    f"type={event.event_type}, client_id={event.client_id or 'null'}"
+                )
                 result = await webhook_handler(db, event)
 
                 if result.success:
@@ -647,6 +651,7 @@ async def _move_to_dead_letter(message_id: str, message_data: dict):
         logger.error(
             f"Message déplacé vers DLQ: original_id={message_id}, "
             f"dlq_id={dlq_id}, type={message_data.get('event_type')}, "
+            f"client_id={message_data.get('client_id', 'null')}, "
             f"user_id={message_data.get('user_id')}{user_info}, "
             f"original_trace_id={message_data.get('trace_id')}"
         )
