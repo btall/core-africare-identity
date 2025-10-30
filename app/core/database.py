@@ -22,7 +22,7 @@ class Base(DeclarativeBase):
 
 
 # Engine SQLAlchemy 2.0
-engine = create_async_engine(str(settings.SQLALCHEMY_DATABASE_URI), echo=settings.DEBUG)
+engine = create_async_engine(str(settings.SQLALCHEMY_DATABASE_URI), echo=False)  # settings.DEBUG)
 
 # Session factory
 async_session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
