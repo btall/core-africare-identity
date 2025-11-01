@@ -110,12 +110,19 @@ class KeycloakWebhookEvent(BaseModel):
     @field_validator("event_time")
     @classmethod
     def validate_event_time(cls, v: int) -> int:
-        """Valide que le timestamp est raisonnable (dernières 24h ou futur proche)."""
+        """Valide que le timestamp est raisonnable (derniers 30 jours ou futur proche).
+
+        Fenêtre de 30 jours pour supporter:
+        - Replay de messages Redis Streams après incident
+        - Traitement de messages pending réclamés après downtime
+        - Backlog d'événements accumulés pendant maintenance
+        """
         now_ms = int(datetime.now().timestamp() * 1000)
         day_ms = 24 * 60 * 60 * 1000
+        thirty_days_ms = 30 * day_ms
 
-        # Accepte événements des dernières 24h ou jusqu'à 1h dans le futur (décalage horaire)
-        if v < (now_ms - day_ms) or v > (now_ms + 3600000):
+        # Accepte événements des derniers 30 jours ou jusqu'à 1h dans le futur (décalage horaire)
+        if v < (now_ms - thirty_days_ms) or v > (now_ms + 3600000):
             raise ValueError(f"Timestamp invalide: {v} (maintenant: {now_ms})")
 
         return v
