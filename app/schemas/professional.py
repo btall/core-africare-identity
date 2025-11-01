@@ -276,3 +276,24 @@ class ProfessionalInvestigationUpdate(BaseModel):
     investigation_notes: str | None = Field(
         None, max_length=1000, description="Notes sur l'enquête en cours"
     )
+
+
+class ProfessionalDeletionContext(BaseModel):
+    """Contexte de suppression pour endpoints administrateur."""
+
+    reason: str | None = Field(
+        None, max_length=1000, description="Raison ou notes sur l'action administrative"
+    )
+
+
+class AnonymizationStatus(BaseModel):
+    """Statut d'anonymisation pour un professionnel soft deleted."""
+
+    professional_id: ProfessionalId = Field(..., description="ID du professionnel")
+    keycloak_user_id: str = Field(..., description="Keycloak user ID")
+    email: str = Field(..., description="Email (potentiellement anonymisé)")
+    soft_deleted_at: datetime | None = Field(None, description="Date de soft delete")
+    anonymized_at: datetime | None = Field(None, description="Date d'anonymisation")
+    deletion_reason: DeletionReason | None = Field(None, description="Raison de la suppression")
+
+    model_config = {"from_attributes": True}
