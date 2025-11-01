@@ -25,7 +25,7 @@ from app.schemas.professional import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/admin/professionals", tags=["admin-professionals"])
+router = APIRouter()
 
 
 @router.post("/{professional_id}/investigation", response_model=ProfessionalResponse)
