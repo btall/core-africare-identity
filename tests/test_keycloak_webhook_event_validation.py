@@ -110,9 +110,9 @@ class TestKeycloakWebhookEventTimestampValidation:
         assert "Timestamp invalide" in errors[0]["msg"]
 
     def test_event_time_near_future_accepted(self):
-        """Les événements jusqu'à 1h dans le futur sont acceptés (décalage horaire)."""
+        """Les événements jusqu'à 5min dans le futur sont acceptés (clock skew)."""
         now_ms = int(datetime.now().timestamp() * 1000)
-        near_future_ms = now_ms + (30 * 60 * 1000)  # 30 minutes in future
+        near_future_ms = now_ms + (3 * 60 * 1000)  # 3 minutes in future
 
         event_data = {
             "eventType": "REGISTER",
@@ -125,9 +125,9 @@ class TestKeycloakWebhookEventTimestampValidation:
         assert event.event_time == near_future_ms
 
     def test_event_time_far_future_rejected(self):
-        """Les événements à plus de 1h dans le futur sont rejetés."""
+        """Les événements à plus de 5min dans le futur sont rejetés."""
         now_ms = int(datetime.now().timestamp() * 1000)
-        far_future_ms = now_ms + (2 * 60 * 60 * 1000)  # 2 hours in future
+        far_future_ms = now_ms + (10 * 60 * 1000)  # 10 minutes in future
 
         event_data = {
             "eventType": "LOGIN",
@@ -179,21 +179,21 @@ class TestKeycloakWebhookEventTimestampValidation:
         event = KeycloakWebhookEvent.model_validate(event_data)
         assert event.event_time == exactly_thirty_days_ms
 
-    def test_event_time_exact_boundary_one_hour_future(self):
-        """Test du cas limite exact: 1 heure dans le futur."""
+    def test_event_time_exact_boundary_five_minutes_future(self):
+        """Test du cas limite exact: 5 minutes dans le futur (clock skew)."""
         now_ms = int(datetime.now().timestamp() * 1000)
-        exactly_one_hour_future_ms = now_ms + (60 * 60 * 1000)
+        exactly_five_minutes_future_ms = now_ms + (5 * 60 * 1000)
 
         event_data = {
             "eventType": "REGISTER",
             "realmId": "africare",
             "userId": "test-user-808",
-            "eventTime": exactly_one_hour_future_ms,
+            "eventTime": exactly_five_minutes_future_ms,
         }
 
-        # 1 heure exactement devrait être accepté
+        # 5 minutes exactement devrait être accepté (clock skew)
         event = KeycloakWebhookEvent.model_validate(event_data)
-        assert event.event_time == exactly_one_hour_future_ms
+        assert event.event_time == exactly_five_minutes_future_ms
 
     def test_real_world_replay_scenario(self):
         """Test du scénario réel: replay d'événements après downtime de 4 jours."""

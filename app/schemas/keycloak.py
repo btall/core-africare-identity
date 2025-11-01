@@ -130,8 +130,9 @@ class KeycloakWebhookEvent(BaseModel):
         day_ms = 24 * 60 * 60 * 1000
         thirty_days_ms = 30 * day_ms
 
-        # Accepte événements des derniers 30 jours ou jusqu'à 1h dans le futur (décalage horaire)
-        if v < (now_ms - thirty_days_ms) or v > (now_ms + 3600000):
+        # Accepte événements des derniers 30 jours ou jusqu'à 5min dans le futur (clock skew)
+        five_minutes_ms = 5 * 60 * 1000  # 300000 ms
+        if v < (now_ms - thirty_days_ms) or v > (now_ms + five_minutes_ms):
             raise ValueError(f"Timestamp invalide: {v} (maintenant: {now_ms})")
 
         return v
