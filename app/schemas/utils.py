@@ -52,3 +52,19 @@ NationalId = Annotated[
     StringConstraints(min_length=5, max_length=50, strip_whitespace=True),
     Field(description="Numéro d'identification nationale"),
 ]
+
+# Chaîne de recherche SQL-safe (prévention injection SQL)
+SanitizedSearchStr = Annotated[
+    str,
+    StringConstraints(
+        pattern=r"^[^%_\\]*$",  # Rejette %, _, et \
+        strip_whitespace=True,
+    ),
+    Field(
+        description=(
+            "Chaîne de recherche sécurisée contre les injections SQL. "
+            "Caractères interdits: % (wildcard SQL), _ (wildcard SQL), \\ (escape SQL)"
+        ),
+        examples=["Amadou", "Jean-Pierre", "Ba Diallo"],
+    ),
+]

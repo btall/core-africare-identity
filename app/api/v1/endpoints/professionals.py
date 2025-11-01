@@ -5,6 +5,7 @@ et la recherche sur les professionnels de santé.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi_errors_rfc9457 import ConflictError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,15 +51,21 @@ async def create_professional(
         )
         return ProfessionalResponse.model_validate(created_professional)
     except IntegrityError as e:
-        if "keycloak_user_id" in str(e):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
+        error_message = str(e)
+        if "keycloak_user_id" in error_message:
+            raise ConflictError(
                 detail="Un professionnel existe déjà avec ce keycloak_user_id",
+                instance="/api/v1/professionals",
             )
-        if "professional_id" in str(e):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
+        if "professional_id" in error_message:
+            raise ConflictError(
                 detail="Un professionnel existe déjà avec ce numéro d'ordre",
+                instance="/api/v1/professionals",
+            )
+        if "email" in error_message:
+            raise ConflictError(
+                detail="Un professionnel existe déjà avec cet email",
+                instance="/api/v1/professionals",
             )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

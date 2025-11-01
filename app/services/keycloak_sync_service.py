@@ -8,6 +8,7 @@ import logging
 from datetime import datetime
 from typing import Literal
 
+import bcrypt
 from keycloak import KeycloakAdmin
 from opentelemetry import trace
 from sqlalchemy import select
@@ -16,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.events import publish
+from app.core.exceptions import AnonymizationError, KeycloakServiceError
 from app.core.retry import async_retry_with_backoff
 from app.models.patient import Patient
 from app.models.professional import Professional
@@ -57,9 +59,8 @@ async def get_user_roles_from_keycloak(user_id: str) -> list[str]:
     Returns:
         Liste des rôles de l'utilisateur (ex: ["patient", "professional"])
 
-    Note:
-        En cas d'erreur lors de la récupération des rôles, retourne une liste vide
-        et log l'erreur pour investigation.
+    Raises:
+        KeycloakServiceError: Si impossible de récupérer les rôles depuis Keycloak.
     """
     with tracer.start_as_current_span("get_user_roles_from_keycloak") as span:
         span.set_attribute("user.keycloak_id", user_id)
@@ -87,8 +88,11 @@ async def get_user_roles_from_keycloak(user_id: str) -> list[str]:
             logger.error(f"Erreur lors de la récupération des rôles Keycloak pour {user_id}: {e}")
             span.record_exception(e)
             span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
-            # Retourner liste vide en cas d'erreur
-            return []
+            # Lever une exception au lieu de retourner []
+            raise KeycloakServiceError(
+                detail=f"Cannot retrieve roles from Keycloak for user {user_id}: {e}",
+                instance=f"/users/{user_id}/roles",
+            ) from e
 
 
 @async_retry_with_backoff(
@@ -145,10 +149,24 @@ async def sync_user_registration(db: AsyncSession, event: KeycloakWebhookEvent) 
                     message="User already synchronized",
                 )
 
-            # Déterminer le type de profil selon le client_id
-            # Si apps-africare-provider-portal → Professional
-            # Sinon (apps-africare-patient-portal ou null) → Patient
-            is_provider = event.client_id == "apps-africare-provider-portal"
+            # Déterminer le type de profil selon les rôles Keycloak ET client_id
+            # Priorité aux rôles Keycloak (source de vérité)
+            # Fallback sur client_id si rôles non disponibles
+            try:
+                user_roles = await get_user_roles_from_keycloak(event.user_id)
+                # Si le rôle "professional" est présent → Professional
+                is_provider = "professional" in user_roles
+                logger.info(
+                    f"Type de profil déterminé par rôles Keycloak: "
+                    f"roles={user_roles}, is_provider={is_provider}"
+                )
+            except KeycloakServiceError:
+                # Fallback sur client_id si Keycloak indisponible
+                logger.warning(
+                    f"Impossible de récupérer les rôles Keycloak, "
+                    f"fallback sur client_id: {event.client_id}"
+                )
+                is_provider = event.client_id == "apps-africare-provider-portal"
 
             if is_provider:
                 # Créer un profil Professional
@@ -822,7 +840,7 @@ async def _anonymize(
     entity_type: Literal["patient", "professional"],
 ) -> None:
     """
-    Anonymisation: Remplace les données personnelles par des valeurs anonymes.
+    Anonymisation RGPD: Hash les données personnelles avec bcrypt.
 
     Préserve:
     - ID (pour relations avec autres services)
@@ -830,22 +848,39 @@ async def _anonymize(
     - Genre / spécialité (pour statistiques médicales)
     - Dates de création/modification (audit)
 
-    Anonymise:
-    - Prénom/Nom
-    - Email
-    - Téléphone
-    - Adresse
-    - GPS (pour patients)
-    - Contact d'urgence
-    - Identifiants nationaux
+    Anonymise (hashed avec bcrypt):
+    - Prénom/Nom (hashés de manière irréversible)
+    - Email (hashé)
+    - Téléphone (supprimé)
+    - Adresse (supprimée)
+    - GPS (pour patients, supprimé)
+    - Contact d'urgence (supprimé)
+    - Identifiants nationaux (supprimés)
+
+    Raises:
+        AnonymizationError: Si le hashing bcrypt échoue.
     """
     entity_id = entity.id
 
-    # Anonymiser les données communes
-    entity.first_name = f"ANONYME_{entity_id}"
-    entity.last_name = f"{entity_type.upper()}_{entity_id}"
-    entity.email = f"deleted_{entity_id}@anonymized.local"
-    entity.phone = None
+    try:
+        # Générer un salt unique pour chaque valeur
+        salt = bcrypt.gensalt()
+
+        # Hasher les données sensibles avec bcrypt (irréversible)
+        entity.first_name = bcrypt.hashpw(f"ANONYME_{entity_id}".encode(), salt).decode("utf-8")
+        entity.last_name = bcrypt.hashpw(
+            f"{entity_type.upper()}_{entity_id}".encode(), salt
+        ).decode("utf-8")
+        entity.email = bcrypt.hashpw(f"deleted_{entity_id}@anonymized.local".encode(), salt).decode(
+            "utf-8"
+        )
+        entity.phone = None
+    except Exception as e:
+        logger.error(f"Échec du hashing bcrypt pour {entity_type} {entity_id}: {e}")
+        raise AnonymizationError(
+            detail=f"Failed to anonymize {entity_type} {entity_id}: bcrypt hashing failed",
+            instance=f"/{entity_type}s/{entity_id}/anonymize",
+        ) from e
 
     # Données spécifiques aux patients
     if isinstance(entity, Patient):
