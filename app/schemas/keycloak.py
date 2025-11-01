@@ -114,6 +114,11 @@ class KeycloakWebhookEvent(BaseModel):
         ..., alias="eventTime", description="Timestamp de l'événement (ms depuis epoch)"
     )
 
+    # Raison de suppression (pour événements DELETE)
+    deletion_reason: str | None = Field(
+        None, alias="deletionReason", description="Raison de la suppression (pour DELETE)"
+    )
+
     model_config = {"populate_by_name": True}  # Accepte à la fois snake_case et camelCase
 
     @field_validator("event_time")

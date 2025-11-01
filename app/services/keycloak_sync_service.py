@@ -5,7 +5,7 @@ entre les événements Keycloak et la base de données locale.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
 import bcrypt
@@ -17,7 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.events import publish
-from app.core.exceptions import AnonymizationError, KeycloakServiceError
+from app.core.exceptions import (
+    AnonymizationError,
+    KeycloakServiceError,
+    ProfessionalDeletionBlockedError,
+)
 from app.core.retry import async_retry_with_backoff
 from app.models.patient import Patient
 from app.models.professional import Professional
@@ -889,20 +893,64 @@ async def _apply_deletion_strategy(
 
 async def _soft_delete(entity: Patient | Professional, event: KeycloakWebhookEvent) -> None:
     """
-    Soft delete: Marque l'entité comme supprimée sans effacer les données.
+    Soft delete avec période de grâce de 7 jours.
 
-    - is_active = False
-    - deleted_at = maintenant
-    - deleted_by = user_id (auto-suppression)
-    - deletion_reason = user_request
+    Workflow:
+    1. Vérifie si professional sous enquête (bloque si true)
+    2. Génère correlation_hash AVANT anonymisation (pour détection retours)
+    3. Marque comme inactif avec soft_deleted_at
+    4. Anonymisation effective après 7 jours (scheduler)
+
+    Raises:
+        ProfessionalDeletionBlockedError: Si professional.under_investigation=True
     """
-    entity.is_active = False
-    entity.deleted_at = datetime.now()
-    entity.deleted_by = event.user_id
-    entity.deletion_reason = "user_request"
-    entity.updated_at = datetime.now()
+    from datetime import UTC
 
-    logger.info(f"Soft delete {entity.__class__.__name__}: {entity.id}")
+    # CHECK: Bloquer si professionnel sous enquête
+    if isinstance(entity, Professional) and entity.under_investigation:
+        logger.error(
+            f"Soft delete bloqué pour Professional {entity.id}: under_investigation=True",
+            extra={"investigation_notes": entity.investigation_notes},
+        )
+        raise ProfessionalDeletionBlockedError(
+            professional_id=entity.id,
+            reason="under_investigation",
+            investigation_notes=entity.investigation_notes,
+        )
+
+    # CHECK: Déjà soft deleted ou anonymisé
+    if hasattr(entity, "soft_deleted_at") and entity.soft_deleted_at is not None:
+        logger.warning(f"{entity.__class__.__name__} {entity.id} already soft deleted")
+        return
+    if hasattr(entity, "anonymized_at") and entity.anonymized_at is not None:
+        logger.warning(f"{entity.__class__.__name__} {entity.id} already anonymized")
+        return
+
+    # STEP 1: Générer correlation_hash AVANT anonymisation (pour professionnels)
+    if isinstance(entity, Professional):
+        if not entity.correlation_hash:
+            entity.correlation_hash = _generate_correlation_hash(
+                entity.email, entity.professional_id
+            )
+            logger.info(
+                f"Generated correlation_hash for Professional {entity.id}",
+                extra={"correlation_hash": entity.correlation_hash},
+            )
+
+    # STEP 2: Soft delete avec période de grâce
+    now = datetime.now(UTC)
+    entity.is_active = False
+    entity.soft_deleted_at = now
+    entity.deletion_reason = event.deletion_reason or "user_request"
+    entity.updated_at = now
+
+    logger.info(
+        f"Soft delete {entity.__class__.__name__}: {entity.id} (grace period: 7 days)",
+        extra={
+            "soft_deleted_at": now.isoformat(),
+            "anonymization_scheduled": (now + timedelta(days=7)).isoformat(),
+        },
+    )
 
 
 async def _anonymize(
