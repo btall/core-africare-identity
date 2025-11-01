@@ -9,6 +9,7 @@ packages = [{include = "app"}]
 [tool.poetry.dependencies]
 python = ">=3.13,<3.14"
 # PostgreSQL dependencies
+alembic = "^1.16.5"
 asyncpg = "^0.30.0"
 sqlalchemy = "^2.0.0"
 fastapi = "^0.118.0"
@@ -30,6 +31,7 @@ opentelemetry-instrumentation = "^0.58b0"
 tenacity = "^9.1.2"
 # Redis messaging (Phase 1 MVP)
 redis = {extras = ["hiredis"], version = "^5.2.0"}
+bcrypt = "^5.0.0"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.2"
 pytest-cov = "^7.0.0"

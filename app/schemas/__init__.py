@@ -1,5 +1,14 @@
 """Schemas Pydantic pour validation des donnees."""
 
+from app.schemas.keycloak import (
+    KeycloakUser,
+    KeycloakUserAttributes,
+    KeycloakWebhookEvent,
+    SyncResult,
+    WebhookHealthCheck,
+    WebhookSignature,
+    WebhookVerificationResponse,
+)
 from app.schemas.responses import (
     COMMON_RESPONSES,
     ConflictErrorResponse,
@@ -18,8 +27,15 @@ from app.schemas.responses import (
 __all__ = [
     "COMMON_RESPONSES",
     "ConflictErrorResponse",
+    "KeycloakUser",
+    "KeycloakUserAttributes",
+    "KeycloakWebhookEvent",
     "ProblemDetailResponse",
+    "SyncResult",
     "ValidationErrorResponse",
+    "WebhookHealthCheck",
+    "WebhookSignature",
+    "WebhookVerificationResponse",
     "admin_responses",
     "auth_responses",
     "build_responses",

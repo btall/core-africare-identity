@@ -63,9 +63,9 @@ class TestParseListFromEnv:
         assert result == ["localhost", "127.0.0.1", "*.example.com", "app.example.com"]
 
     def test_invalid_json_format(self):
-        """Test avec format JSON invalide."""
+        """Test avec format JSON invalide (commence et finit par crochets mais contenu invalide)."""
         with pytest.raises(ValueError, match="Format JSON invalide pour test_field"):
-            parse_list_from_env('["val1", "val2"', "test_field")
+            parse_list_from_env('["val1", "val2", ]', "test_field")  # Virgule trailing invalide
 
     def test_invalid_type(self):
         """Test avec type invalide."""

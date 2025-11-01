@@ -5,11 +5,12 @@ et la recherche sur les professionnels de santé.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi_errors_rfc9457 import ConflictError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.security import get_current_user
+from app.core.security import get_current_user, require_roles
 from app.schemas.professional import (
     ProfessionalCreate,
     ProfessionalListResponse,
@@ -27,25 +28,21 @@ router = APIRouter()
     response_model=ProfessionalResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Créer un nouveau professionnel de santé",
-    description="Crée un nouveau profil professionnel dans le système",
+    description="Crée un nouveau profil professionnel dans le système (admin seulement)",
 )
 async def create_professional(
     professional: ProfessionalCreate,
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_roles("admin")),
 ) -> ProfessionalResponse:
     """
     Crée un nouveau professionnel de santé.
 
-    Permissions requises : role 'admin'
-    """
-    # Vérifier le rôle admin
-    if "admin" not in current_user.get("realm_access", {}).get("roles", []):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Seuls les administrateurs peuvent créer des professionnels",
-        )
+    Permissions requises: JWT avec rôle 'admin'
 
+    Note: La création automatique de profils professionnels depuis l'inscription Keycloak
+    est gérée par le système de webhooks via Redis Streams, pas par cet endpoint.
+    """
     try:
         created_professional = await professional_service.create_professional(
             db=db,
@@ -54,15 +51,21 @@ async def create_professional(
         )
         return ProfessionalResponse.model_validate(created_professional)
     except IntegrityError as e:
-        if "keycloak_user_id" in str(e):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
+        error_message = str(e)
+        if "keycloak_user_id" in error_message:
+            raise ConflictError(
                 detail="Un professionnel existe déjà avec ce keycloak_user_id",
+                instance="/api/v1/professionals",
             )
-        if "professional_id" in str(e):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
+        if "professional_id" in error_message:
+            raise ConflictError(
                 detail="Un professionnel existe déjà avec ce numéro d'ordre",
+                instance="/api/v1/professionals",
+            )
+        if "email" in error_message:
+            raise ConflictError(
+                detail="Un professionnel existe déjà avec cet email",
+                instance="/api/v1/professionals",
             )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

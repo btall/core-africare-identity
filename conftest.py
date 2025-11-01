@@ -38,8 +38,19 @@ TEST_ENV = {
         f"postgresql+asyncpg://core-africare-identity_test:test_password@localhost:{TEST_PORTS['postgres']}/core-africare-identity_test",
     ),
     "REDIS_URL": os.getenv("REDIS_URL", f"redis://localhost:{TEST_PORTS['redis']}/0"),
-    "ENVIRONMENT": os.getenv("ENVIRONMENT", "test"),
+    "ENVIRONMENT": os.getenv("ENVIRONMENT", "development"),  # Changed from "test" to "development"
     "DEBUG": os.getenv("DEBUG", "false"),
+    # Keycloak (test mode)
+    "KEYCLOAK_SERVER_URL": os.getenv("KEYCLOAK_SERVER_URL", "http://localhost:8080"),
+    "KEYCLOAK_REALM": os.getenv("KEYCLOAK_REALM", "africare"),
+    "KEYCLOAK_CLIENT_ID": os.getenv("KEYCLOAK_CLIENT_ID", "core-africare-identity"),
+    # OpenTelemetry (test mode)
+    "OTEL_SERVICE_NAME": os.getenv("OTEL_SERVICE_NAME", "core-africare-identity-test"),
+    "OTEL_EXPORTER_OTLP_ENDPOINT": os.getenv(
+        "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
+    ),
+    "OTEL_EXPORTER_OTLP_PROTOCOL": os.getenv("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc"),
+    "OTEL_EXPORTER_OTLP_INSECURE": os.getenv("OTEL_EXPORTER_OTLP_INSECURE", "true"),
 }
 
 # Appliquer les variables d'environnement de test (ne remplace pas si déjà définies)
@@ -61,7 +72,7 @@ def event_loop():
     loop.close()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 async def test_engine():
     """
     Crée le moteur SQLAlchemy de test.
@@ -110,7 +121,7 @@ async def db_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
 # ============================================================================
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 async def test_redis_client():
     """
     Crée le client Redis de test.

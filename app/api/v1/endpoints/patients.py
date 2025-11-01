@@ -5,6 +5,7 @@ et la recherche sur les patients.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi_errors_rfc9457 import ConflictError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,15 +48,21 @@ async def create_patient(
         )
         return PatientResponse.model_validate(created_patient)
     except IntegrityError as e:
-        if "keycloak_user_id" in str(e):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
+        error_message = str(e)
+        if "keycloak_user_id" in error_message:
+            raise ConflictError(
                 detail="Un patient existe déjà avec ce keycloak_user_id",
+                instance="/api/v1/patients",
             )
-        if "national_id" in str(e):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
+        if "national_id" in error_message:
+            raise ConflictError(
                 detail="Un patient existe déjà avec cet identifiant national",
+                instance="/api/v1/patients",
+            )
+        if "email" in error_message:
+            raise ConflictError(
+                detail="Un patient existe déjà avec cet email",
+                instance="/api/v1/patients",
             )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

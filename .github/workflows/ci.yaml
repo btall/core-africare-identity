@@ -132,6 +132,8 @@ jobs:
           KEYCLOAK_REALM: test
           KEYCLOAK_CLIENT_ID: test-client
           KEYCLOAK_CLIENT_SECRET: test-secret
+          # Webhook Security
+          WEBHOOK_SECRET: test-webhook-secret
           # OpenTelemetry (désactivé pour tests)
           OTEL_SERVICE_NAME: core-africare-identity
           OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:4317

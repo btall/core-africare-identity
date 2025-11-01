@@ -65,17 +65,21 @@ class Settings(BaseSettings):
     API_LATEST_VERSION: str = "v1"
 
     # Environnement
-    ENVIRONMENT: Literal["development", "staging", "production"] = "development"
+    ENVIRONMENT: Literal["development", "staging", "production", "test"] = "development"
     DEBUG: bool = False
 
     # JWT (si nécessaire pour l'authentification)
     API_GATEWAY_URL: AnyHttpUrl = "http://api-gateway-service:8000"
 
-    # Keycloak Authentication
+    # Keycloak Authentication (bearer-only mode - client_secret not needed)
     KEYCLOAK_SERVER_URL: str
     KEYCLOAK_REALM: str
     KEYCLOAK_CLIENT_ID: str
-    KEYCLOAK_CLIENT_SECRET: str
+    # KEYCLOAK_CLIENT_SECRET: str  # Not needed for bearer-only clients
+
+    # Webhook Security
+    WEBHOOK_SECRET: str  # Secret partagé pour vérifier la signature des webhooks Keycloak
+    WEBHOOK_SIGNATURE_TOLERANCE: int = 300  # Tolérance timestamp en secondes (5 min)
 
     # OpenTelemetry
     OTEL_SERVICE_NAME: str
@@ -183,6 +187,7 @@ class Settings(BaseSettings):
     class Config:
         case_sensitive = True
         env_file = ".env"
+        extra = "ignore"  # Ignorer les variables d'environnement non définies (ex: KEYCLOAK_CLIENT_SECRET)
 
 
 # Instance unique des paramètres chargée depuis .env

@@ -44,7 +44,7 @@ async def create_professional(
     with tracer.start_as_current_span("create_professional") as span:
         span.set_attribute("professional.keycloak_user_id", professional_data.keycloak_user_id)
 
-        # Créer le professionnel
+        # Créer le professionnel directement depuis les données Pydantic
         professional = Professional(
             **professional_data.model_dump(),
             created_by=current_user_id,

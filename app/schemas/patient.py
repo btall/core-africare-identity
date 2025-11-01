@@ -21,6 +21,7 @@ from app.schemas.utils import (
     NonEmptyStr,
     PatientId,
     PhoneNumber,
+    SanitizedSearchStr,
 )
 
 
@@ -180,11 +181,11 @@ class PatientListItem(BaseModel):
 class PatientSearchFilters(BaseModel):
     """Filtres de recherche pour patients."""
 
-    first_name: str | None = Field(
-        None, description="Recherche par prénom (partielle, insensible à la casse)"
+    first_name: SanitizedSearchStr | None = Field(
+        None, description="Recherche par prénom (partielle, insensible à la casse, SQL-safe)"
     )
-    last_name: str | None = Field(
-        None, description="Recherche par nom (partielle, insensible à la casse)"
+    last_name: SanitizedSearchStr | None = Field(
+        None, description="Recherche par nom (partielle, insensible à la casse, SQL-safe)"
     )
     national_id: str | None = Field(None, description="Recherche exacte par ID national")
     email: str | None = Field(None, description="Recherche exacte par email")

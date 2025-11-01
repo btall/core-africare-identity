@@ -1,25 +1,22 @@
 import logging
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from keycloak import KeycloakOpenID
 from opentelemetry import trace
-from opentelemetry.instrumentation.logging import LoggingInstrumentor
 from pydantic import BaseModel
 
 from app.core.config import settings
 
-LoggingInstrumentor().instrument(set_logging_format=True)
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
-# Keycloak client configuration
+# Keycloak client configuration (bearer-only mode - no client_secret needed)
 keycloak_openid = KeycloakOpenID(
     server_url=settings.KEYCLOAK_SERVER_URL,
     client_id=settings.KEYCLOAK_CLIENT_ID,
     realm_name=settings.KEYCLOAK_REALM,
-    client_secret_key=settings.KEYCLOAK_CLIENT_SECRET,
 )
 
 # Security scheme for Bearer token
@@ -37,12 +34,81 @@ class User(BaseModel):
 
 
 async def verify_token(token: str) -> dict:
-    """Verify JWT token with Keycloak."""
+    """
+    Verify JWT token with Keycloak.
+
+    Validates:
+    - Token signature and expiration (via decode_token)
+    - iss (issuer) - must be from our Keycloak realm
+    - azp (authorized party) - must be from allowed frontend clients
+    - aud (audience) - must include this service or be 'account'
+    """
     with tracer.start_as_current_span("verify_keycloak_token") as span:
         try:
-            # Decode and verify token with Keycloak
-            token_info = keycloak_openid.decode_token(token)
+            # Decode and verify token with Keycloak (validate=True ensures full verification)
+            token_info = keycloak_openid.decode_token(token, validate=True)
+
+            # Validate iss (issuer) - who issued this token
+            # Skip in DEBUG mode as issuer URL varies (localhost vs keycloak vs host.docker.internal)
+            iss = token_info.get("iss")
+            if not settings.DEBUG:
+                # Production: Must be from our Keycloak realm
+                expected_issuer = (
+                    f"{settings.KEYCLOAK_SERVER_URL.rstrip('/')}/realms/{settings.KEYCLOAK_REALM}"
+                )
+                if not iss or iss != expected_issuer:
+                    logger.error(f"Invalid issuer in token: {iss}. Expected: {expected_issuer}")
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail=f"Token from unauthorized issuer: {iss}",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
+            else:
+                # Development: Log issuer for debugging but don't validate
+                logger.debug(f"DEBUG mode: Skipping issuer validation. Token issuer: {iss}")
+
+            # Validate azp (authorized party) - who requested this token
+            # Only accept tokens from our known frontend clients
+            allowed_azp = {
+                "apps-africare-provider-portal",  # Healthcare provider portal
+                "apps-africare-patient-portal",  # Patient portal
+                "apps-africare-admin-portal",  # Admin portal
+            }
+
+            azp = token_info.get("azp")
+            if not azp or azp not in allowed_azp:
+                logger.error(f"Invalid azp in token: {azp}. Expected one of: {allowed_azp}")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=f"Token not authorized for this service (invalid azp: {azp})",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
+            # Validate aud (audience) - who can use this token
+            # Accept tokens meant for this service or the generic 'account' audience
+            aud = token_info.get("aud", [])
+            if isinstance(aud, str):
+                aud = [aud]
+
+            valid_audiences = {"account", settings.KEYCLOAK_CLIENT_ID}
+            if not any(audience in valid_audiences for audience in aud):
+                logger.error(
+                    f"Invalid audience in token: {aud}. Expected one of: {valid_audiences}"
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=f"Token not intended for this service (invalid audience: {aud})",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
             span.set_attribute("auth.user_id", token_info.get("sub"))
+            span.set_attribute("auth.iss", iss)
+            span.set_attribute("auth.azp", azp)
+            span.set_attribute("auth.aud", str(aud))
+
+            logger.debug(
+                f"Token validated successfully - iss: {iss}, azp: {azp}, aud: {aud}, user: {token_info.get('sub')}"
+            )
             return token_info
         except Exception as e:
             logger.error(f"Token verification failed: {e}")
@@ -55,30 +121,67 @@ async def verify_token(token: str) -> dict:
             ) from e
 
 
-async def get_token_data(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security_scheme)],
-) -> dict:
-    """Extract and verify token from HTTP Bearer credentials."""
-    return await verify_token(credentials.credentials)
-
-
-async def get_current_user(token_data: Annotated[dict, Depends(get_token_data)]) -> dict:
+async def extract_token(
+    request: Request,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security_scheme)] = None,
+) -> str:
     """
-    Get current user from verified Keycloak token.
+    Extract JWT token from multiple sources (for SSE and HTTP compatibility).
 
-    Returns raw token data dict for convenience in endpoints.
-    For structured User model, use get_current_user_model().
+    Token extraction priority:
+    1. Authorization header: Bearer <token> (standard for HTTP requests)
+    2. Query parameter: ?token=<token> (for SSE/EventSource)
+    3. Cookie: auth_token (alternative for SSE)
+
+    This multi-source approach enables:
+    - Standard HTTP requests: Use Authorization header (interceptor-compatible)
+    - SSE connections: Use query parameter (EventSource limitation)
+    - Cookie-based auth: Use cookie (alternative for browsers)
+
+    Args:
+        request: FastAPI Request object
+        credentials: HTTPAuthorizationCredentials from Bearer scheme (optional)
+
+    Returns:
+        JWT token string
+
+    Raises:
+        HTTPException: If no token found in any source
     """
+    # Source 1: Authorization header (Bearer token)
+    if credentials:
+        logger.debug("Token extracted from Authorization header")
+        return credentials.credentials
+
+    # Source 2: Query parameter (?token=<jwt>)
+    token = request.query_params.get("token")
+    if token:
+        logger.debug("Token extracted from query parameter")
+        return token
+
+    # Source 3: Cookie (auth_token)
+    token = request.cookies.get("auth_token")
+    if token:
+        logger.debug("Token extracted from cookie")
+        return token
+
+    # No token found in any source
+    logger.warning("No authentication token found in request")
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required. Provide token via Authorization header, query parameter, or cookie.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+async def get_token_data(token: Annotated[str, Depends(extract_token)]) -> dict:
+    """Extract and verify token from multiple sources."""
+    return await verify_token(token)
+
+
+async def get_current_user(token_data: Annotated[dict, Depends(get_token_data)]) -> User:
+    """Get current user from verified Keycloak token."""
     with tracer.start_as_current_span("get_current_user") as span:
-        span.set_attribute("auth.user_id", token_data.get("sub"))
-        span.set_attribute("auth.username", token_data.get("preferred_username", "unknown"))
-        logger.info(f"User authenticated: {token_data.get('sub')}")
-        return token_data
-
-
-async def get_current_user_model(token_data: Annotated[dict, Depends(get_token_data)]) -> User:
-    """Get current user as Pydantic User model from verified Keycloak token."""
-    with tracer.start_as_current_span("get_current_user_model") as span:
         try:
             user = User(**token_data)
             span.set_attribute("auth.user_id", user.sub)
@@ -133,7 +236,7 @@ def require_roles(*roles: str, require_all: bool = False):
         @router.get("/patient-only", dependencies=[Depends(require_roles("patient"))])
     """
 
-    async def role_checker(current_user: User = Depends(get_current_user_model)) -> User:
+    async def role_checker(current_user: User = Depends(get_current_user)) -> User:
         with tracer.start_as_current_span("check_user_roles") as span:
             span.set_attribute("auth.required_roles", ",".join(roles))
             span.set_attribute("auth.require_all", require_all)

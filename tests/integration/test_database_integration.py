@@ -119,16 +119,14 @@ async def test_create_and_read_professional(db_session: AsyncSession):
     # Arrange
     professional = Professional(
         keycloak_user_id="prof-user-001",
-        first_name="Dr. Ousmane",
+        first_name="Ousmane",
         last_name="Sy",
-        date_of_birth=date(1975, 8, 12),
-        gender="male",
+        title="Dr",
         email="dr.ousmane.sy@hopital.sn",
         phone="+221771111111",
-        profession_type="doctor",
+        professional_type="physician",
         specialty="general_medicine",
-        license_number="SN-MED-2024-001",
-        license_country="Sénégal",
+        professional_id="SN-MED-2024-001",
         is_active=True,
     )
 
@@ -140,11 +138,11 @@ async def test_create_and_read_professional(db_session: AsyncSession):
     # Assert
     assert professional.id is not None
     assert professional.keycloak_user_id == "prof-user-001"
-    assert professional.first_name == "Dr. Ousmane"
+    assert professional.first_name == "Ousmane"
     assert professional.last_name == "Sy"
-    assert professional.profession_type == "doctor"
+    assert professional.professional_type == "physician"
     assert professional.specialty == "general_medicine"
-    assert professional.license_number == "SN-MED-2024-001"
+    assert professional.professional_id == "SN-MED-2024-001"
     assert professional.created_at is not None
 
     # Vérifier lecture depuis la base
@@ -153,41 +151,43 @@ async def test_create_and_read_professional(db_session: AsyncSession):
     )
     retrieved_prof = result.scalar_one()
     assert retrieved_prof.id == professional.id
-    assert retrieved_prof.license_number == "SN-MED-2024-001"
+    assert retrieved_prof.professional_id == "SN-MED-2024-001"
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_professional_unique_license(db_session: AsyncSession):
-    """Test que le numéro de licence est unique."""
+    """Test que le numéro d'ordre professionnel (professional_id) est unique."""
     # Créer premier professionnel
     prof1 = Professional(
         keycloak_user_id="prof-unique-001",
-        first_name="Dr. Aminata",
+        first_name="Aminata",
         last_name="Ba",
-        date_of_birth=date(1980, 4, 18),
-        gender="female",
-        profession_type="doctor",
-        license_number="SN-MED-UNIQUE-999",
-        license_country="Sénégal",
+        title="Dr",
+        email="aminata.ba@hopital.sn",
+        phone="+221771112222",
+        professional_type="physician",
+        specialty="pediatrics",
+        professional_id="SN-MED-UNIQUE-999",
     )
     db_session.add(prof1)
     await db_session.commit()
 
-    # Tenter de créer un second professionnel avec la même licence
+    # Tenter de créer un second professionnel avec le même professional_id
     prof2 = Professional(
         keycloak_user_id="prof-unique-002",
-        first_name="Dr. Ibrahima",
+        first_name="Ibrahima",
         last_name="Fall",
-        date_of_birth=date(1982, 9, 25),
-        gender="male",
-        profession_type="doctor",
-        license_number="SN-MED-UNIQUE-999",  # Même licence
-        license_country="Sénégal",
+        title="Dr",
+        email="ibrahima.fall@clinique.sn",
+        phone="+221771113333",
+        professional_type="physician",
+        specialty="cardiology",
+        professional_id="SN-MED-UNIQUE-999",  # Même numéro d'ordre
     )
     db_session.add(prof2)
 
-    # Doit échouer à cause de la contrainte unique
+    # Doit échouer à cause de la contrainte unique sur professional_id
     with pytest.raises(IntegrityError):
         await db_session.commit()
 
