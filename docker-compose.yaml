@@ -13,6 +13,11 @@ services:
   #     - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
   #   networks:
   #     - africare-network
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U core-africare-identity"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
 
   # redis:
   #   image: redis:7-alpine
@@ -24,29 +29,38 @@ services:
   #     - core_africare_identity_redis_data:/data
   #   networks:
   #     - africare-network
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
 
-  migrate:
+  # Service Alembic pour migrations de base de données
+  alembic:
     build: .
-    container_name: core-africare-identity-migrate
-    command: ["alembic", "upgrade", "head"]
+    container_name: core-africare-identity-alembic
+    # docker-compose --profile migration run --rm alembic <commande> [arguments]
+    entrypoint: ["alembic"]
+    environment:
+      # Impossible to run alembic without this variable
+      PYTHONPATH: /home/app/web
+      # PostgreSQL Database (externe) - SEULE VARIABLE UTILISÉE
+      SQLALCHEMY_DATABASE_URI: postgresql+asyncpg://core-africare-identity:vd8bveedbnBpMcYr_8qB6A@host.docker.internal:5432/core-africare-identity
+
+      # Autres variables minimales pour Alembic (requises par Settings mais non utilisées pour migrations)
+      KEYCLOAK_SERVER_URL: http://localhost:8080/auth
+      KEYCLOAK_REALM: dummy-realm
+      KEYCLOAK_CLIENT_ID: dummy-client
+      OTEL_SERVICE_NAME: core-africare-identity-alembic
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_EXPORTER_OTLP_INSECURE: "true"
     volumes:
       - .:/home/app/web
-    environment:
-      # PostgreSQL Database
-      SQLALCHEMY_DATABASE_URI: postgresql+asyncpg://core-africare-identity:vd8bveedbnBpMcYr_8qB6A@host.docker.internal:5432/core-africare-identity
-      # Autres variables minimales pour Alembic
-      OTEL_SERVICE_NAME: core-africare-identity
-      KEYCLOAK_SERVER_URL: http://keycloak:8080/auth
-      KEYCLOAK_REALM: africare
-      KEYCLOAK_CLIENT_ID: core-africare-identity
-      WEBHOOK_SECRET: dummy-secret-for-migration
-      PYTHONPATH: /home/app/web
-    # depends_on:
-    #   - postgres
     networks:
       - africare-network
     profiles:
-      - tools
+      - migration
 
   # core-africare-identity:
   #   build: .
