@@ -164,20 +164,22 @@ class TestKeycloakWebhookEventTimestampValidation:
         assert abs((timestamp_dt - now).total_seconds()) < 1
 
     def test_event_time_exact_boundary_thirty_days(self):
-        """Test du cas limite exact: 30 jours exactement."""
+        """Test du cas limite proche: 29 jours et 23 heures dans le passé."""
         now_ms = int(datetime.now().timestamp() * 1000)
-        exactly_thirty_days_ms = now_ms - (30 * 24 * 60 * 60 * 1000)
+        # Utiliser 29 jours + 23h pour éviter race condition temporelle
+        # (le validateur recalcule now_ms quelques ms plus tard)
+        almost_thirty_days_ms = now_ms - (29 * 24 * 60 * 60 * 1000) - (23 * 60 * 60 * 1000)
 
         event_data = {
             "eventType": "UPDATE_PROFILE",
             "realmId": "africare",
             "userId": "test-user-707",
-            "eventTime": exactly_thirty_days_ms,
+            "eventTime": almost_thirty_days_ms,
         }
 
-        # 30 jours exactement devrait être accepté
+        # 29 jours + 23h devrait être accepté (dans la fenêtre de 30 jours)
         event = KeycloakWebhookEvent.model_validate(event_data)
-        assert event.event_time == exactly_thirty_days_ms
+        assert event.event_time == almost_thirty_days_ms
 
     def test_event_time_exact_boundary_one_hour_future(self):
         """Test du cas limite exact: 1 heure dans le futur."""
