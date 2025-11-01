@@ -125,19 +125,59 @@ class Professional(Base):
         nullable=False, default=True, comment="Disponible pour consultations"
     )
 
-    # Soft delete
+    # Enquête médico-légale (bloque suppression si True)
+    under_investigation: Mapped[bool] = mapped_column(
+        nullable=False,
+        default=False,
+        index=True,
+        comment="Professionnel sous enquête médico-légale (bloque suppression)",
+    )
+    investigation_notes: Mapped[str | None] = mapped_column(
+        String(1000), nullable=True, comment="Notes sur l'enquête en cours"
+    )
+
+    # Corrélation pour détecter retour après anonymisation
+    correlation_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+        comment="Hash SHA-256 de email+professional_id pour corrélation anonymisée",
+    )
+
+    # Soft delete avec période de grâce
+    soft_deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+        comment="Date de soft delete (début période de grâce 7 jours)",
+    )
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
         index=True,
-        comment="Date de suppression (soft delete)",
+        comment="Date de suppression définitive (deprecated, use soft_deleted_at)",
     )
     deleted_by: Mapped[str | None] = mapped_column(
         String(255), nullable=True, comment="Keycloak user ID de l'utilisateur qui a supprimé"
     )
     deletion_reason: Mapped[
-        Literal["user_request", "admin_action", "gdpr_compliance", "other"] | None
+        Literal[
+            "user_request",
+            "admin_termination",
+            "professional_revocation",
+            "gdpr_compliance",
+            "prolonged_inactivity",
+            "admin_action",  # Deprecated, use admin_termination
+            "other",
+        ]
+        | None
     ] = mapped_column(String(50), nullable=True, comment="Raison de la suppression")
+    anonymized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+        comment="Date d'anonymisation définitive (après période de grâce)",
+    )
 
     # Métadonnées
     created_at: Mapped[datetime] = mapped_column(
