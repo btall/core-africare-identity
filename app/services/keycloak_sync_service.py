@@ -629,6 +629,77 @@ async def _create_professional_from_event(
 ################################################################################
 
 
+def _generate_correlation_hash(email: str, professional_id: str | None) -> str:
+    """
+    Génère un hash de corrélation SHA-256 déterministe pour détecter retours après anonymisation.
+
+    Le hash est calculé à partir de email + professional_id + salt global, permettant
+    de détecter si un professionnel revient après anonymisation sans stocker les données
+    personnelles en clair (conformité RGPD).
+
+    Args:
+        email: Email du professionnel avant anonymisation
+        professional_id: Numéro d'ordre professionnel (peut être None)
+
+    Returns:
+        Hash SHA-256 hexadécimal (64 caractères)
+
+    Example:
+        >>> hash = _generate_correlation_hash("dr.diop@hospital.sn", "CNOM12345")
+        >>> len(hash)
+        64
+    """
+    import hashlib
+
+    from app.core.config import settings
+
+    # Salt global depuis configuration (ou défaut si non défini)
+    salt = getattr(settings, "CORRELATION_HASH_SALT", "africare-identity-salt-v1")
+
+    # Construire la chaîne à hasher
+    hash_input = f"{email}|{professional_id or ''}|{salt}"
+
+    # Générer SHA-256
+    return hashlib.sha256(hash_input.encode("utf-8")).hexdigest()
+
+
+async def _check_returning_professional(
+    db: AsyncSession, email: str, professional_id: str | None
+) -> Professional | None:
+    """
+    Vérifie si un professionnel anonymisé revient en calculant son correlation_hash.
+
+    Cette fonction permet de détecter les professionnels qui reviennent après suppression
+    en comparant le hash calculé avec ceux stockés dans la base.
+
+    Args:
+        db: Session de base de données async
+        email: Email du nouveau professionnel
+        professional_id: Numéro d'ordre professionnel (peut être None)
+
+    Returns:
+        Professionnel anonymisé correspondant si trouvé, None sinon
+
+    Example:
+        ```python
+        returning = await _check_returning_professional(db, "dr.diop@hospital.sn", "CNOM12345")
+        if returning:
+            logger.info(f"Professionnel revenant détecté: {returning.id}")
+        ```
+    """
+    # Générer le hash pour ce professionnel
+    correlation_hash = _generate_correlation_hash(email, professional_id)
+
+    # Chercher professionnel avec ce hash (uniquement anonymisés)
+    result = await db.execute(
+        select(Professional).where(
+            Professional.correlation_hash == correlation_hash,
+            Professional.anonymized_at.isnot(None),  # Seulement les anonymisés
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 @async_retry_with_backoff(
     max_attempts=3,
     min_wait_seconds=1,
