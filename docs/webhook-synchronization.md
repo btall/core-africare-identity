@@ -22,12 +22,37 @@ Le service `core-africare-identity` implémente un système de synchronisation t
 
 ### Événements Supportés
 
-| Événement       | Description                                | Action                          |
-|-----------------|--------------------------------------------|---------------------------------|
-| `REGISTER`      | Nouvel utilisateur enregistré sur Keycloak | Crée un profil Patient/Professional |
-| `UPDATE_PROFILE`| Mise à jour du profil utilisateur          | Met à jour Patient/Professional  |
-| `UPDATE_EMAIL`  | Changement d'adresse email                 | Met à jour l'email du Patient    |
-| `LOGIN`         | Connexion utilisateur                      | Tracking/Analytics uniquement    |
+| Événement       | Description                                | Action                          | Filtrage |
+|-----------------|--------------------------------------------|---------------------------------|----------|
+| `REGISTER`      | Nouvel utilisateur enregistré sur Keycloak | Crée un profil Patient/Professional | Par clientId |
+| `UPDATE_PROFILE`| Mise à jour du profil utilisateur          | Met à jour Patient/Professional  | Par clientId |
+| `UPDATE_EMAIL`  | Changement d'adresse email                 | Met à jour l'email du Patient    | Par clientId |
+| `LOGIN`         | Connexion utilisateur                      | Tracking/Analytics uniquement    | Par clientId |
+| `DELETE`        | Suppression utilisateur                    | Suppression/Anonymisation        | Aucun (toujours traité) |
+| `VERIFY_EMAIL`  | Vérification email                         | Tracking (handler TODO)          | Par clientId |
+| `LOGOUT`        | Déconnexion utilisateur                    | Tracking (handler TODO)          | Par clientId |
+
+**Événements ignorés**:
+
+- `ADMIN_UPDATE`: Modifications via console admin Keycloak
+- Tous les événements avec préfixe `ADMIN_*`
+
+### Filtrage par Client
+
+**Seuls les événements provenant des portails métier sont synchronisés**:
+
+- `apps-africare-patient-portal` (portail patient)
+- `apps-africare-provider-portal` (portail professionnel)
+
+**Les événements d'autres clients sont ignorés**:
+
+- `security-admin-console` (console admin Keycloak)
+- `apps-africare-admin-portal` (portail admin AfriCare)
+- Autres applications personnalisées
+
+**Exception**: Les événements `DELETE` sont **toujours traités**, quel que soit le clientId, pour maintenir la cohérence des données (droit à l'oubli RGPD).
+
+**Documentation complète**: Voir [Filtrage des Événements Webhook](./webhook-client-filtering.md)
 
 ## Endpoints API
 
@@ -449,8 +474,12 @@ Le service publie ces événements vers Redis Pub/Sub pour consommation par d'au
 ## Références
 
 - [Configuration Keycloak](./keycloak-webhook-setup.md)
+- [Filtrage des Événements Webhook](./webhook-client-filtering.md)
+- [Validation Temporelle](./webhook-timestamp-validation.md)
+- [Architecture Redis Streams](./webhooks.md)
 - [Schémas Pydantic](../app/schemas/keycloak.py)
 - [Service de Synchronisation](../app/services/keycloak_sync_service.py)
+- [Webhook Processor](../app/services/webhook_processor.py)
 - [Endpoint Webhook](../app/api/v1/endpoints/webhooks.py)
 - [Module de Sécurité](../app/core/webhook_security.py)
 - [Module de Retry](../app/core/retry.py)
