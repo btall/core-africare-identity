@@ -5,7 +5,7 @@ entre les événements Keycloak et la base de données locale.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 import bcrypt
@@ -173,6 +173,40 @@ async def sync_user_registration(db: AsyncSession, event: KeycloakWebhookEvent) 
                 is_provider = event.client_id == "apps-africare-provider-portal"
 
             if is_provider:
+                # DETECT: Vérifier si professionnel revient après anonymisation
+                email = event.user.email if event.user else None
+                professional_id = None  # TODO: Extraire de user attributes si disponible
+
+                if email:
+                    returning_professional = await _check_returning_professional(
+                        db, email, professional_id
+                    )
+                    if returning_professional:
+                        logger.info(
+                            f"Professionnel revenant détecté: {returning_professional.id} "
+                            f"(correlation_hash={returning_professional.correlation_hash})"
+                        )
+                        # Publier événement de retour
+                        await publish(
+                            "identity.professional.returning_user",
+                            {
+                                "old_professional_id": returning_professional.id,
+                                "new_keycloak_user_id": event.user_id,
+                                "correlation_hash": returning_professional.correlation_hash,
+                                "old_soft_deleted_at": (
+                                    returning_professional.soft_deleted_at.isoformat()
+                                    if returning_professional.soft_deleted_at
+                                    else None
+                                ),
+                                "old_anonymized_at": (
+                                    returning_professional.anonymized_at.isoformat()
+                                    if returning_professional.anonymized_at
+                                    else None
+                                ),
+                                "detected_at": datetime.now(UTC).isoformat(),
+                            },
+                        )
+
                 # Créer un profil Professional
                 professional = await _create_professional_from_event(db, event)
                 await db.commit()
