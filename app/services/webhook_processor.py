@@ -79,8 +79,32 @@ async def route_webhook_event(db: AsyncSession, event: KeycloakWebhookEvent) -> 
         span.set_attribute("event.client_id", event.client_id or "null")
 
         # Vérifier si le client est autorisé pour la synchronisation
-        # Les utilisateurs admin (ou autres clients non autorisés) sont ignorés
-        if event.client_id and event.client_id not in ALLOWED_CLIENT_IDS:
+        # Les actions admin console (ADMIN_UPDATE) sont ignorées
+        if event.event_type.startswith("ADMIN_"):
+            logger.info(
+                f"Événement admin console ignoré: type={event.event_type}, "
+                f"user_id={event.user_id}, clientId={event.client_id or 'null'}"
+            )
+            span.add_event(
+                "Événement admin console ignoré",
+                {"event_type": event.event_type, "client_id": event.client_id or "null"},
+            )
+
+            return SyncResult(
+                success=True,
+                event_type=event.event_type,
+                user_id=event.user_id,
+                patient_id=None,
+                message=f"Événement admin console ignoré: {event.event_type}",
+            )
+
+        # Pour les événements normaux, filtrer par clientId autorisé
+        # Exception: DELETE peut avoir clientId=null (suppression admin console)
+        if (
+            event.event_type != "DELETE"
+            and event.client_id
+            and event.client_id not in ALLOWED_CLIENT_IDS
+        ):
             logger.info(
                 f"Événement ignoré: clientId={event.client_id} non autorisé "
                 f"(autorisés: {', '.join(ALLOWED_CLIENT_IDS)}). "

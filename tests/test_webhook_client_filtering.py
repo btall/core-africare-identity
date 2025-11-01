@@ -186,8 +186,8 @@ class TestWebhookClientFiltering:
         assert result.patient_id is None
 
     @pytest.mark.asyncio
-    async def test_disallowed_client_delete_event(self):
-        """Les événements DELETE d'un admin sont ignorés."""
+    async def test_delete_event_from_admin_client_is_processed(self):
+        """Les événements DELETE même d'un admin sont traités (synchronisation suppression)."""
         event = KeycloakWebhookEvent(
             eventType="DELETE",
             realmId="africare",
@@ -197,11 +197,25 @@ class TestWebhookClientFiltering:
         )
 
         mock_db = AsyncMock()
-        result = await route_webhook_event(mock_db, event)
 
-        # Ignoré avec succès
+        # Mock du handler DELETE dans EVENT_HANDLERS
+        mock_handler = AsyncMock(
+            return_value=SyncResult(
+                success=True,
+                event_type="DELETE",
+                user_id="user-admin-delete",
+                patient_id=None,
+                message="User deletion processed",
+            )
+        )
+
+        with patch("app.services.webhook_processor.EVENT_HANDLERS", {"DELETE": mock_handler}):
+            result = await route_webhook_event(mock_db, event)
+
+        # DELETE est traité même si clientId non autorisé (synchronisation des suppressions)
         assert result.success is True
-        assert "ignoré" in result.message.lower()
+        assert "ignoré" not in result.message.lower()
+        assert result.event_type == "DELETE"
 
     @pytest.mark.asyncio
     async def test_disallowed_client_event_attributes_set(self):
@@ -240,3 +254,143 @@ class TestWebhookClientFiltering:
         # Doit être ignoré car la casse ne correspond pas
         assert result.success is True
         assert "ignoré" in result.message.lower()
+
+    @pytest.mark.asyncio
+    async def test_admin_update_event_ignored(self):
+        """Les événements ADMIN_UPDATE sont ignorés (console admin Keycloak)."""
+        event = KeycloakWebhookEvent(
+            eventType="ADMIN_UPDATE",
+            realmId="africare",
+            clientId="security-admin-console",
+            userId="user-updated-by-admin",
+            eventTime=get_valid_timestamp(),
+            user={
+                "id": "user-updated-by-admin",
+                "username": "patient@africare.sn",
+                "email": "patient@africare.sn",
+                "firstName": "Amadou",
+                "lastName": "Diallo",
+                "enabled": True,
+            },
+        )
+
+        mock_db = AsyncMock()
+        result = await route_webhook_event(mock_db, event)
+
+        # L'événement ADMIN_UPDATE est ignoré avec succès
+        assert result.success is True
+        assert "admin console" in result.message.lower()
+        assert result.patient_id is None
+
+    @pytest.mark.asyncio
+    async def test_admin_update_with_null_client_id(self):
+        """Les événements ADMIN_UPDATE sans clientId sont ignorés."""
+        event = KeycloakWebhookEvent(
+            eventType="ADMIN_UPDATE",
+            realmId="africare",
+            clientId=None,  # Admin console peut avoir clientId null
+            userId="user-admin-update-null",
+            eventTime=get_valid_timestamp(),
+            user={
+                "id": "user-admin-update-null",
+                "username": "test@africare.sn",
+                "email": "test@africare.sn",
+                "enabled": True,
+            },
+        )
+
+        mock_db = AsyncMock()
+        result = await route_webhook_event(mock_db, event)
+
+        # Ignoré avec succès même si clientId est null
+        assert result.success is True
+        assert "admin console" in result.message.lower()
+
+    @pytest.mark.asyncio
+    async def test_delete_with_null_client_id_is_processed(self):
+        """Les événements DELETE avec clientId=null sont traités (suppression admin)."""
+        event = KeycloakWebhookEvent(
+            eventType="DELETE",
+            realmId="africare",
+            clientId=None,  # DELETE peut avoir clientId null (admin console)
+            userId="user-deleted-by-admin",
+            eventTime=get_valid_timestamp(),
+        )
+
+        mock_db = AsyncMock()
+
+        # Mock du handler DELETE dans EVENT_HANDLERS
+        mock_handler = AsyncMock(
+            return_value=SyncResult(
+                success=True,
+                event_type="DELETE",
+                user_id="user-deleted-by-admin",
+                patient_id=None,
+                message="User deletion processed",
+            )
+        )
+
+        with patch("app.services.webhook_processor.EVENT_HANDLERS", {"DELETE": mock_handler}):
+            result = await route_webhook_event(mock_db, event)
+
+        # DELETE est traité même si clientId est null
+        assert result.success is True
+        assert "ignoré" not in result.message.lower()
+        assert result.event_type == "DELETE"
+
+    @pytest.mark.asyncio
+    async def test_delete_with_allowed_client_is_processed(self):
+        """Les événements DELETE avec clientId autorisé sont traités."""
+        event = KeycloakWebhookEvent(
+            eventType="DELETE",
+            realmId="africare",
+            clientId="apps-africare-patient-portal",  # Client autorisé
+            userId="user-deleted-patient",
+            eventTime=get_valid_timestamp(),
+        )
+
+        mock_db = AsyncMock()
+
+        # Mock du handler DELETE dans EVENT_HANDLERS
+        mock_handler = AsyncMock(
+            return_value=SyncResult(
+                success=True,
+                event_type="DELETE",
+                user_id="user-deleted-patient",
+                patient_id=123,
+                message="User deleted successfully",
+            )
+        )
+
+        with patch("app.services.webhook_processor.EVENT_HANDLERS", {"DELETE": mock_handler}):
+            result = await route_webhook_event(mock_db, event)
+
+        # DELETE avec clientId autorisé est traité
+        assert result.success is True
+        assert "ignoré" not in result.message.lower()
+        assert result.event_type == "DELETE"
+
+    @pytest.mark.asyncio
+    async def test_admin_update_prefix_always_ignored(self):
+        """Les événements ADMIN_UPDATE (préfixe ADMIN_) sont toujours ignorés."""
+        event = KeycloakWebhookEvent(
+            eventType="ADMIN_UPDATE",
+            realmId="africare",
+            clientId="security-admin-console",
+            userId="user-admin-update-test",
+            eventTime=get_valid_timestamp(),
+            user={
+                "id": "user-admin-update-test",
+                "username": "test@africare.sn",
+                "email": "test@africare.sn",
+                "enabled": True,
+            },
+        )
+
+        mock_db = AsyncMock()
+        result = await route_webhook_event(mock_db, event)
+
+        # ADMIN_UPDATE doit être ignoré
+        assert result.success is True
+        assert "admin console" in result.message.lower()
+        assert result.patient_id is None

@@ -81,9 +81,18 @@ class KeycloakUser(BaseModel):
 class KeycloakWebhookEvent(BaseModel):
     """Schéma principal pour un événement webhook Keycloak."""
 
-    event_type: Literal["REGISTER", "UPDATE_PROFILE", "UPDATE_EMAIL", "LOGIN", "DELETE"] = Field(
-        ..., alias="eventType", description="Type d'événement Keycloak"
-    )
+    event_type: Literal[
+        # Événements utilisateur normaux
+        "REGISTER",
+        "UPDATE_PROFILE",
+        "UPDATE_EMAIL",
+        "LOGIN",
+        "VERIFY_EMAIL",
+        "LOGOUT",
+        # Événements admin console
+        "ADMIN_UPDATE",
+        "DELETE",
+    ] = Field(..., alias="eventType", description="Type d'événement Keycloak")
     realm_id: str = Field(..., alias="realmId", description="Identifiant du realm Keycloak")
     client_id: str | None = Field(None, alias="clientId", description="Client Keycloak émetteur")
     user_id: str = Field(..., alias="userId", description="UUID de l'utilisateur Keycloak")
