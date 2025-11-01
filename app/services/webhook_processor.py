@@ -33,6 +33,13 @@ from app.services.keycloak_sync_service import (
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
+# Clients Keycloak autorisés pour la synchronisation patient/professional
+# Les autres clients (ex: admin portal) sont ignorés
+ALLOWED_CLIENT_IDS = {
+    "apps-africare-patient-portal",
+    "apps-africare-provider-portal",
+}
+
 # Mapping type d'événement → handler
 EVENT_HANDLERS = {
     "REGISTER": sync_user_registration,
@@ -69,6 +76,30 @@ async def route_webhook_event(db: AsyncSession, event: KeycloakWebhookEvent) -> 
     with tracer.start_as_current_span("route_webhook_event") as span:
         span.set_attribute("event.type", event.event_type)
         span.set_attribute("event.user_id", event.user_id)
+        span.set_attribute("event.client_id", event.client_id or "null")
+
+        # Vérifier si le client est autorisé pour la synchronisation
+        # Les utilisateurs admin (ou autres clients non autorisés) sont ignorés
+        if event.client_id and event.client_id not in ALLOWED_CLIENT_IDS:
+            logger.info(
+                f"Événement ignoré: clientId={event.client_id} non autorisé "
+                f"(autorisés: {', '.join(ALLOWED_CLIENT_IDS)}). "
+                f"Type={event.event_type}, user_id={event.user_id}"
+            )
+            span.add_event(
+                "Événement ignoré: client non autorisé",
+                {"client_id": event.client_id, "allowed_clients": ", ".join(ALLOWED_CLIENT_IDS)},
+            )
+
+            # Retourner un SUCCÈS (pas un échec) pour ACK le message
+            # Les admins n'ont pas besoin d'être synchronisés comme patients/professionals
+            return SyncResult(
+                success=True,
+                event_type=event.event_type,
+                user_id=event.user_id,
+                patient_id=None,
+                message=f"Événement ignoré: clientId {event.client_id} non autorisé (admin)",
+            )
 
         # Récupérer le handler
         handler = EVENT_HANDLERS.get(event.event_type)
