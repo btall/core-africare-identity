@@ -106,6 +106,56 @@ class AnonymizationError(InternalServerError):
         )
 
 
+class ProfessionalDeletionBlockedError(RFC9457Exception):
+    """
+    Exception levée lorsqu'une suppression de professionnel est bloquée.
+
+    Cette exception est utilisée lorsqu'un professionnel ne peut pas être supprimé
+    car il est sous enquête médico-légale (under_investigation=True) ou pour
+    d'autres raisons légales/administratives.
+
+    Attributes:
+        status_code: Code HTTP 423 (Locked)
+        problem_detail: Détails de l'erreur au format RFC 9457
+
+    Example:
+        ```python
+        if professional.under_investigation:
+            raise ProfessionalDeletionBlockedError(
+                professional_id=professional.id,
+                reason="under_investigation",
+                investigation_notes=professional.investigation_notes
+            )
+        ```
+    """
+
+    def __init__(
+        self,
+        professional_id: int,
+        reason: str = "under_investigation",
+        investigation_notes: str | None = None,
+    ):
+        """
+        Initialise une exception de blocage de suppression avec détails RFC 9457.
+
+        Args:
+            professional_id: ID du professionnel concerné
+            reason: Raison du blocage (under_investigation, legal_hold, etc.)
+            investigation_notes: Notes explicatives sur le blocage
+        """
+        detail_parts = [f"Cannot delete professional {professional_id}: {reason}"]
+        if investigation_notes:
+            detail_parts.append(f"Notes: {investigation_notes}")
+
+        super().__init__(
+            status_code=423,  # Locked
+            title="Professional Deletion Blocked",
+            detail=". ".join(detail_parts),
+            type="https://africare.app/errors/deletion-blocked",
+            instance=f"/api/v1/professionals/{professional_id}",
+        )
+
+
 __all__ = [
     "AfriCareException",
     "AnonymizationError",
@@ -115,6 +165,7 @@ __all__ = [
     "KeycloakServiceError",
     "NotFoundError",
     "ProblemDetail",
+    "ProfessionalDeletionBlockedError",
     "RFC9457Exception",
     "ServiceUnavailableError",
     "UnauthorizedError",
