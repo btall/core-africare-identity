@@ -101,7 +101,8 @@ class TestAnonymization:
         )
 
         # Autres champs doivent être None (pas de données en clair)
-        assert patient.phone is None
+        # Phone utilise placeholder car NOT NULL pour Professional
+        assert patient.phone == "+ANONYMIZED"
         assert patient.national_id is None
 
         # Marqueurs RGPD OK
@@ -139,7 +140,8 @@ class TestAnonymization:
         assert professional.last_name.startswith("$2") or len(professional.last_name) == 60
 
         # Données supprimées
-        assert professional.phone is None
+        # Phone utilise placeholder car NOT NULL pour Professional
+        assert professional.phone == "+ANONYMIZED"
         assert professional.professional_id is None
 
         # Marqueurs RGPD

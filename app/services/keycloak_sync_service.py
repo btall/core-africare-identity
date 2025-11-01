@@ -993,7 +993,8 @@ async def _anonymize(
         entity.email = bcrypt.hashpw(f"deleted_{entity_id}@anonymized.local".encode(), salt).decode(
             "utf-8"
         )
-        entity.phone = None
+        # Phone est NOT NULL pour Professional, utiliser placeholder
+        entity.phone = "+ANONYMIZED"
     except Exception as e:
         logger.error(f"Échec du hashing bcrypt pour {entity_type} {entity_id}: {e}")
         raise AnonymizationError(
@@ -1034,6 +1035,79 @@ async def _anonymize(
     entity.deleted_by = event.user_id
     entity.deletion_reason = "gdpr_compliance"
     entity.updated_at = datetime.now()
+
+    logger.info(f"{entity.__class__.__name__} anonymisé: {entity_id}")
+
+
+def _anonymize_entity(entity: Patient | Professional) -> None:
+    """
+    Anonymise une entité (Patient ou Professional) sans événement Keycloak.
+
+    Version simplifiée de _anonymize() pour usage par le scheduler.
+    Utilisée par anonymization_scheduler pour anonymiser après période de grâce.
+
+    Args:
+        entity: Instance Patient ou Professional à anonymiser
+
+    Raises:
+        AnonymizationError: Si le hashing bcrypt échoue
+    """
+    from datetime import UTC
+
+    entity_id = entity.id
+    entity_type = "professional" if isinstance(entity, Professional) else "patient"
+
+    try:
+        # Générer un salt unique pour chaque valeur
+        salt = bcrypt.gensalt()
+
+        # Hasher les données sensibles avec bcrypt (irréversible)
+        entity.first_name = bcrypt.hashpw(f"ANONYME_{entity_id}".encode(), salt).decode("utf-8")
+        entity.last_name = bcrypt.hashpw(
+            f"{entity_type.upper()}_{entity_id}".encode(), salt
+        ).decode("utf-8")
+        entity.email = bcrypt.hashpw(f"deleted_{entity_id}@anonymized.local".encode(), salt).decode(
+            "utf-8"
+        )
+        # Phone est NOT NULL pour Professional, utiliser placeholder
+        entity.phone = "+ANONYMIZED"
+    except Exception as e:
+        logger.error(f"Échec du hashing bcrypt pour {entity_type} {entity_id}: {e}")
+        raise AnonymizationError(
+            detail=f"Failed to anonymize {entity_type} {entity_id}: bcrypt hashing failed",
+            instance=f"/{entity_type}s/{entity_id}/anonymize",
+        ) from e
+
+    # Données spécifiques aux patients
+    if isinstance(entity, Patient):
+        entity.phone_secondary = None
+        entity.national_id = None
+        entity.address_line1 = None
+        entity.address_line2 = None
+        entity.city = None
+        entity.region = None
+        entity.postal_code = None
+        entity.latitude = None
+        entity.longitude = None
+        entity.emergency_contact_name = None
+        entity.emergency_contact_phone = None
+        entity.notes = "[DONNEES ANONYMISEES CONFORMEMENT RGPD]"
+
+    # Données spécifiques aux professionnels
+    if isinstance(entity, Professional):
+        entity.phone_secondary = None
+        entity.professional_id = None
+        entity.facility_name = None
+        entity.facility_address = None
+        entity.facility_city = None
+        entity.facility_region = None
+        entity.qualifications = "[DONNEES ANONYMISEES CONFORMEMENT RGPD]"
+        entity.notes = "[DONNEES ANONYMISEES CONFORMEMENT RGPD]"
+        entity.digital_signature = None
+
+    # Marquer comme inactif (déjà fait par soft_delete, mais par sécurité)
+    entity.is_active = False
+    entity.updated_at = datetime.now(UTC)
 
     logger.info(f"{entity.__class__.__name__} anonymisé: {entity_id}")
 
