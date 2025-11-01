@@ -25,7 +25,7 @@ router = APIRouter()
     status_code=status.HTTP_200_OK,
     summary="Statistiques globales du dashboard",
     description="Récupère les statistiques principales pour le dashboard administrateur",
-    dependencies=[Depends(require_roles(["admin"]))],
+    dependencies=[Depends(require_roles("admin"))],
 )
 async def get_dashboard_statistics(
     db: AsyncSession = Depends(get_session),
@@ -50,7 +50,7 @@ async def get_dashboard_statistics(
     status_code=status.HTTP_200_OK,
     summary="Statistiques détaillées des patients",
     description="Récupère les statistiques complètes des patients avec répartitions par genre et région",
-    dependencies=[Depends(require_roles(["admin"]))],
+    dependencies=[Depends(require_roles("admin"))],
 )
 async def get_patient_statistics(
     db: AsyncSession = Depends(get_session),
@@ -75,7 +75,7 @@ async def get_patient_statistics(
     status_code=status.HTTP_200_OK,
     summary="Statistiques détaillées des professionnels",
     description="Récupère les statistiques complètes des professionnels avec répartitions par type et spécialité",
-    dependencies=[Depends(require_roles(["admin"]))],
+    dependencies=[Depends(require_roles("admin"))],
 )
 async def get_professional_statistics(
     db: AsyncSession = Depends(get_session),
