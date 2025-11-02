@@ -33,7 +33,7 @@ router = APIRouter()
 async def create_patient(
     patient: PatientCreate,
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> PatientResponse:
     """
     Crée un nouveau patient.
@@ -44,7 +44,7 @@ async def create_patient(
         created_patient = await patient_service.create_patient(
             db=db,
             patient_data=patient,
-            current_user_id=current_user["sub"],
+            current_user_id=current_user.sub,
         )
         return PatientResponse.model_validate(created_patient)
     except IntegrityError as e:
@@ -79,7 +79,7 @@ async def create_patient(
 async def get_patient(
     patient_id: int,
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> PatientResponse:
     """
     Récupère un patient par son ID.
@@ -105,7 +105,7 @@ async def get_patient(
 async def get_patient_by_keycloak_id(
     keycloak_user_id: str,
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> PatientResponse:
     """
     Récupère un patient par son keycloak_user_id.
@@ -124,9 +124,9 @@ async def get_patient_by_keycloak_id(
 
     # Vérifier que l'utilisateur accède à son propre profil ou est admin/professional
     if (
-        patient.keycloak_user_id != current_user["sub"]
-        and "admin" not in current_user.get("realm_access", {}).get("roles", [])
-        and "professional" not in current_user.get("realm_access", {}).get("roles", [])
+        patient.keycloak_user_id != current_user.sub
+        and "admin" not in (current_user.realm_access or {}).get("roles", [])
+        and "professional" not in (current_user.realm_access or {}).get("roles", [])
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -146,7 +146,7 @@ async def update_patient(
     patient_id: int,
     patient_update: PatientUpdate,
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> PatientResponse:
     """
     Met à jour un patient existant.
@@ -163,9 +163,9 @@ async def update_patient(
 
     # Vérifier les permissions
     if (
-        existing_patient.keycloak_user_id != current_user["sub"]
-        and "admin" not in current_user.get("realm_access", {}).get("roles", [])
-        and "professional" not in current_user.get("realm_access", {}).get("roles", [])
+        existing_patient.keycloak_user_id != current_user.sub
+        and "admin" not in (current_user.realm_access or {}).get("roles", [])
+        and "professional" not in (current_user.realm_access or {}).get("roles", [])
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -176,7 +176,7 @@ async def update_patient(
         db=db,
         patient_id=patient_id,
         patient_data=patient_update,
-        current_user_id=current_user["sub"],
+        current_user_id=current_user.sub,
     )
 
     return PatientResponse.model_validate(updated_patient)
@@ -191,7 +191,7 @@ async def update_patient(
 async def delete_patient(
     patient_id: int,
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> None:
     """
     Supprime un patient (soft delete).
@@ -208,7 +208,7 @@ async def delete_patient(
     deleted = await patient_service.delete_patient(
         db=db,
         patient_id=patient_id,
-        current_user_id=current_user["sub"],
+        current_user_id=current_user.sub,
     )
 
     if not deleted:
@@ -290,7 +290,7 @@ async def search_patients(
 async def verify_patient(
     patient_id: int,
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> PatientResponse:
     """
     Marque un patient comme vérifié.
@@ -309,7 +309,7 @@ async def verify_patient(
     verified_patient = await patient_service.verify_patient(
         db=db,
         patient_id=patient_id,
-        current_user_id=current_user["sub"],
+        current_user_id=current_user.sub,
     )
 
     if not verified_patient:

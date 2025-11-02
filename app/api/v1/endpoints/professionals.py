@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.security import get_current_user, require_roles
+from app.core.security import User, get_current_user, require_roles
 from app.schemas.professional import (
     ProfessionalCreate,
     ProfessionalListResponse,
@@ -33,7 +33,7 @@ router = APIRouter()
 async def create_professional(
     professional: ProfessionalCreate,
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(require_roles("admin")),
+    current_user: User = Depends(require_roles("admin")),
 ) -> ProfessionalResponse:
     """
     Crée un nouveau professionnel de santé.
@@ -47,7 +47,7 @@ async def create_professional(
         created_professional = await professional_service.create_professional(
             db=db,
             professional_data=professional,
-            current_user_id=current_user["sub"],
+            current_user_id=current_user.sub,
         )
         return ProfessionalResponse.model_validate(created_professional)
     except IntegrityError as e:
@@ -82,7 +82,7 @@ async def create_professional(
 async def get_professional(
     professional_id: int,
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> ProfessionalResponse:
     """
     Récupère un professionnel par son ID.
@@ -110,7 +110,7 @@ async def get_professional(
 async def get_professional_by_keycloak_id(
     keycloak_user_id: str,
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> ProfessionalResponse:
     """
     Récupère un professionnel par son keycloak_user_id.
@@ -128,8 +128,8 @@ async def get_professional_by_keycloak_id(
         )
 
     # Vérifier que l'utilisateur accède à son propre profil ou est admin
-    if professional.keycloak_user_id != current_user["sub"] and "admin" not in current_user.get(
-        "realm_access", {}
+    if professional.keycloak_user_id != current_user.sub and "admin" not in (
+        current_user.realm_access or {}
     ).get("roles", []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -148,7 +148,7 @@ async def get_professional_by_keycloak_id(
 async def get_professional_by_professional_id(
     professional_id: str,
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> ProfessionalResponse:
     """
     Récupère un professionnel par son numéro d'ordre professionnel.
@@ -178,7 +178,7 @@ async def update_professional(
     professional_id: int,
     professional_update: ProfessionalUpdate,
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> ProfessionalResponse:
     """
     Met à jour un professionnel existant.
@@ -196,9 +196,9 @@ async def update_professional(
         )
 
     # Vérifier les permissions
-    if existing_professional.keycloak_user_id != current_user[
-        "sub"
-    ] and "admin" not in current_user.get("realm_access", {}).get("roles", []):
+    if existing_professional.keycloak_user_id != current_user.sub and "admin" not in (
+        current_user.realm_access or {}
+    ).get("roles", []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Accès non autorisé pour modifier ce profil professionnel",
@@ -208,7 +208,7 @@ async def update_professional(
         db=db,
         professional_id=professional_id,
         professional_data=professional_update,
-        current_user_id=current_user["sub"],
+        current_user_id=current_user.sub,
     )
 
     return ProfessionalResponse.model_validate(updated_professional)
@@ -223,7 +223,7 @@ async def update_professional(
 async def delete_professional(
     professional_id: int,
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> None:
     """
     Supprime un professionnel (soft delete).
@@ -240,7 +240,7 @@ async def delete_professional(
     deleted = await professional_service.delete_professional(
         db=db,
         professional_id=professional_id,
-        current_user_id=current_user["sub"],
+        current_user_id=current_user.sub,
     )
 
     if not deleted:
@@ -271,7 +271,7 @@ async def search_professionals(
     skip: int = Query(0, ge=0, description="Nombre d'éléments à sauter"),
     limit: int = Query(20, ge=1, le=100, description="Nombre d'éléments à retourner"),
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> ProfessionalListResponse:
     """
     Recherche des professionnels avec filtres et pagination.
@@ -315,7 +315,7 @@ async def search_professionals(
 async def verify_professional(
     professional_id: int,
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> ProfessionalResponse:
     """
     Marque un professionnel comme vérifié.
@@ -332,7 +332,7 @@ async def verify_professional(
     verified_professional = await professional_service.verify_professional(
         db=db,
         professional_id=professional_id,
-        current_user_id=current_user["sub"],
+        current_user_id=current_user.sub,
     )
 
     if not verified_professional:
@@ -354,7 +354,7 @@ async def toggle_availability(
     professional_id: int,
     is_available: bool = Query(..., description="Disponible (true) ou indisponible (false)"),
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> ProfessionalResponse:
     """
     Change la disponibilité d'un professionnel.
@@ -372,8 +372,8 @@ async def toggle_availability(
         )
 
     # Vérifier les permissions
-    if professional.keycloak_user_id != current_user["sub"] and "admin" not in current_user.get(
-        "realm_access", {}
+    if professional.keycloak_user_id != current_user.sub and "admin" not in (
+        current_user.realm_access or {}
     ).get("roles", []):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -384,7 +384,7 @@ async def toggle_availability(
         db=db,
         professional_id=professional_id,
         is_available=is_available,
-        current_user_id=current_user["sub"],
+        current_user_id=current_user.sub,
     )
 
     return ProfessionalResponse.model_validate(updated_professional)

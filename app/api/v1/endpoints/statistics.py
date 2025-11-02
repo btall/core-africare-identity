@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.security import get_current_user, require_roles
+from app.core.security import User, get_current_user, require_roles
 from app.schemas.statistics import (
     DashboardStatistics,
     PatientStatistics,
@@ -29,7 +29,7 @@ router = APIRouter()
 )
 async def get_dashboard_statistics(
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> DashboardStatistics:
     """
     Récupère les statistiques globales du dashboard.
@@ -54,7 +54,7 @@ async def get_dashboard_statistics(
 )
 async def get_patient_statistics(
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> PatientStatistics:
     """
     Récupère les statistiques détaillées des patients.
@@ -79,7 +79,7 @@ async def get_patient_statistics(
 )
 async def get_professional_statistics(
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> ProfessionalStatistics:
     """
     Récupère les statistiques détaillées des professionnels de santé.
