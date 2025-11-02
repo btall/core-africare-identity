@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.security import User, get_current_user, require_resource_owner_or_roles, require_roles
+from app.core.security import User, get_current_user, require_roles
 from app.schemas.patient import (
     PatientCreate,
     PatientListResponse,
@@ -101,7 +101,7 @@ async def get_patient(
     response_model=PatientResponse,
     summary="Récupérer un patient par Keycloak user ID",
     description="Récupère les détails d'un patient par son keycloak_user_id",
-    dependencies=[Depends(require_roles("admin", "professional", "patient"))],
+    dependencies=[Depends(require_roles("admin:medical", "professional", "patient"))],
 )
 async def get_patient_by_keycloak_id(
     keycloak_user_id: str,
@@ -123,10 +123,9 @@ async def get_patient_by_keycloak_id(
             detail=f"Patient avec keycloak_user_id {keycloak_user_id} non trouvé",
         )
 
-    # Vérifier que l'utilisateur accède à son propre profil ou est admin/professional
-    require_resource_owner_or_roles(
-        patient.keycloak_user_id, current_user, additional_roles=["professional"]
-    )
+    # Vérification RGPD explicite : owner OU admin
+    _access_reason = current_user.verify_access(patient.keycloak_user_id)
+    # TODO: audit_log(current_user, "read_patient", patient.id, _access_reason)
 
     return PatientResponse.model_validate(patient)
 
@@ -136,7 +135,7 @@ async def get_patient_by_keycloak_id(
     response_model=PatientResponse,
     summary="Mettre à jour un patient",
     description="Met à jour les informations d'un patient existant",
-    dependencies=[Depends(require_roles("admin", "professional", "patient"))],
+    dependencies=[Depends(require_roles("admin:medical", "professional", "patient"))],
 )
 async def update_patient(
     patient_id: int,
@@ -147,7 +146,7 @@ async def update_patient(
     """
     Met à jour un patient existant.
 
-    Permissions requises : Patient owner, admin ou professional
+    Permissions requises : Patient owner, admin:medical ou professional
     """
     # Récupérer le patient existant pour vérification
     existing_patient = await patient_service.get_patient(db=db, patient_id=patient_id)
@@ -157,10 +156,9 @@ async def update_patient(
             detail=f"Patient avec ID {patient_id} non trouvé",
         )
 
-    # Vérifier les permissions: owner OU admin OU professional
-    require_resource_owner_or_roles(
-        existing_patient.keycloak_user_id, current_user, additional_roles=["professional"]
-    )
+    # Vérification RGPD explicite : owner OU admin
+    _access_reason = current_user.verify_access(existing_patient.keycloak_user_id)
+    # TODO: audit_log(current_user, "update_patient", patient_id, _access_reason)
 
     updated_patient = await patient_service.update_patient(
         db=db,

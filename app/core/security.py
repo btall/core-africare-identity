@@ -32,6 +32,39 @@ class User(BaseModel):
     realm_access: dict | None = None
     resource_access: dict | None = None
 
+    @property
+    def is_admin(self) -> bool:
+        """Check si l'utilisateur a un rôle admin quelconque."""
+        if self.realm_access and "roles" in self.realm_access:
+            return any(role.startswith("admin") for role in self.realm_access["roles"])
+        return False
+
+    def is_owner(self, resource_owner_id: str) -> bool:
+        """Check si l'utilisateur est le propriétaire de la ressource."""
+        return self.sub == resource_owner_id
+
+    def verify_access(self, resource_owner_id: str) -> str:
+        """
+        Vérifie l'accès et retourne la raison pour traçabilité RGPD.
+
+        Returns:
+            "owner" si propriétaire de la ressource
+            "admin_supervision" si admin (pas owner)
+
+        Raises:
+            HTTPException 403 si ni owner ni admin
+        """
+        if self.is_owner(resource_owner_id):
+            return "owner"
+
+        if self.is_admin:
+            return "admin_supervision"
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Accès refusé : vous devez être le propriétaire de la ressource",
+        )
+
 
 async def verify_token(token: str) -> dict:
     """
@@ -212,56 +245,6 @@ def check_user_role(user: User, required_role: str) -> bool:
             return True
 
     return False
-
-
-def require_resource_owner_or_roles(
-    resource_owner_id: str,
-    current_user: User,
-    additional_roles: list[str] | None = None,
-) -> None:
-    """
-    Vérifie que l'utilisateur est propriétaire de la ressource OU a un rôle autorisé.
-
-    Note: Le rôle 'admin' est TOUJOURS autorisé automatiquement.
-
-    Args:
-        resource_owner_id: ID Keycloak du propriétaire de la ressource
-        current_user: Utilisateur courant (de type User Pydantic)
-        additional_roles: Rôles supplémentaires autorisés en plus de "admin" (optionnel)
-
-    Raises:
-        HTTPException 403: Si l'utilisateur n'est ni owner ni autorisé par rôle
-
-    Examples:
-        # Owner OU admin (défaut)
-        require_resource_owner_or_roles(professional.keycloak_user_id, current_user)
-
-        # Owner OU admin OU manager
-        require_resource_owner_or_roles(
-            professional.keycloak_user_id,
-            current_user,
-            additional_roles=["manager"]
-        )
-    """
-    # Check 1: Owner
-    if resource_owner_id == current_user.sub:
-        return
-
-    # Check 2: Admin est TOUJOURS autorisé
-    if check_user_role(current_user, "admin"):
-        return
-
-    # Check 3: Rôles supplémentaires
-    if additional_roles:
-        for role in additional_roles:
-            if check_user_role(current_user, role):
-                return
-
-    # Aucune condition remplie
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="Accès non autorisé: vous devez être propriétaire de la ressource ou avoir un rôle autorisé",
-    )
 
 
 def require_roles(*roles: str, require_all: bool = False):

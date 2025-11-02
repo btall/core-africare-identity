@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.security import User, get_current_user, require_resource_owner_or_roles, require_roles
+from app.core.security import User, get_current_user, require_roles
 from app.schemas.professional import (
     ProfessionalCreate,
     ProfessionalListResponse,
@@ -106,7 +106,7 @@ async def get_professional(
     response_model=ProfessionalResponse,
     summary="Récupérer un professionnel par Keycloak user ID",
     description="Récupère les détails d'un professionnel par son keycloak_user_id",
-    dependencies=[Depends(require_roles("admin", "professional"))],
+    dependencies=[Depends(require_roles("admin:technical", "professional"))],
 )
 async def get_professional_by_keycloak_id(
     keycloak_user_id: str,
@@ -128,8 +128,9 @@ async def get_professional_by_keycloak_id(
             detail=f"Professionnel avec keycloak_user_id {keycloak_user_id} non trouvé",
         )
 
-    # Vérifier que l'utilisateur accède à son propre profil ou est admin
-    require_resource_owner_or_roles(professional.keycloak_user_id, current_user)
+    # Vérification RGPD explicite : owner OU admin
+    _access_reason = current_user.verify_access(professional.keycloak_user_id)
+    # TODO: audit_log(current_user, "read_professional", professional.id, _access_reason)
 
     return ProfessionalResponse.model_validate(professional)
 
@@ -168,7 +169,7 @@ async def get_professional_by_professional_id(
     response_model=ProfessionalResponse,
     summary="Mettre à jour un professionnel",
     description="Met à jour les informations d'un professionnel existant",
-    dependencies=[Depends(require_roles("admin", "professional"))],
+    dependencies=[Depends(require_roles("admin:technical", "professional"))],
 )
 async def update_professional(
     professional_id: int,
@@ -179,7 +180,7 @@ async def update_professional(
     """
     Met à jour un professionnel existant.
 
-    Permissions requises : Professional owner ou admin
+    Permissions requises : Professional owner ou admin:technical
     """
     # Récupérer le professionnel existant pour vérification
     existing_professional = await professional_service.get_professional(
@@ -191,8 +192,9 @@ async def update_professional(
             detail=f"Professionnel avec ID {professional_id} non trouvé",
         )
 
-    # Vérifier les permissions: owner OU admin
-    require_resource_owner_or_roles(existing_professional.keycloak_user_id, current_user)
+    # Vérification RGPD explicite : owner OU admin
+    _access_reason = current_user.verify_access(existing_professional.keycloak_user_id)
+    # TODO: audit_log(current_user, "update_professional", professional_id, _access_reason)
 
     updated_professional = await professional_service.update_professional(
         db=db,
@@ -339,7 +341,7 @@ async def verify_professional(
     response_model=ProfessionalResponse,
     summary="Changer la disponibilité",
     description="Change la disponibilité d'un professionnel pour consultations",
-    dependencies=[Depends(require_roles("admin", "professional"))],
+    dependencies=[Depends(require_roles("admin:technical", "professional"))],
 )
 async def toggle_availability(
     professional_id: int,
@@ -350,7 +352,7 @@ async def toggle_availability(
     """
     Change la disponibilité d'un professionnel.
 
-    Permissions requises : Professional owner ou admin
+    Permissions requises : Professional owner ou admin:technical
     """
     # Récupérer le professionnel pour vérification
     professional = await professional_service.get_professional(
@@ -362,8 +364,9 @@ async def toggle_availability(
             detail=f"Professionnel avec ID {professional_id} non trouvé",
         )
 
-    # Vérifier les permissions: owner OU admin
-    require_resource_owner_or_roles(professional.keycloak_user_id, current_user)
+    # Vérification RGPD explicite : owner OU admin
+    _access_reason = current_user.verify_access(professional.keycloak_user_id)
+    # TODO: await publish("audit.access", {..._access_reason...})
 
     updated_professional = await professional_service.toggle_availability(
         db=db,
