@@ -214,6 +214,56 @@ def check_user_role(user: User, required_role: str) -> bool:
     return False
 
 
+def require_resource_owner_or_roles(
+    resource_owner_id: str,
+    current_user: User,
+    additional_roles: list[str] | None = None,
+) -> None:
+    """
+    Vérifie que l'utilisateur est propriétaire de la ressource OU a un rôle autorisé.
+
+    Note: Le rôle 'admin' est TOUJOURS autorisé automatiquement.
+
+    Args:
+        resource_owner_id: ID Keycloak du propriétaire de la ressource
+        current_user: Utilisateur courant (de type User Pydantic)
+        additional_roles: Rôles supplémentaires autorisés en plus de "admin" (optionnel)
+
+    Raises:
+        HTTPException 403: Si l'utilisateur n'est ni owner ni autorisé par rôle
+
+    Examples:
+        # Owner OU admin (défaut)
+        require_resource_owner_or_roles(professional.keycloak_user_id, current_user)
+
+        # Owner OU admin OU manager
+        require_resource_owner_or_roles(
+            professional.keycloak_user_id,
+            current_user,
+            additional_roles=["manager"]
+        )
+    """
+    # Check 1: Owner
+    if resource_owner_id == current_user.sub:
+        return
+
+    # Check 2: Admin est TOUJOURS autorisé
+    if check_user_role(current_user, "admin"):
+        return
+
+    # Check 3: Rôles supplémentaires
+    if additional_roles:
+        for role in additional_roles:
+            if check_user_role(current_user, role):
+                return
+
+    # Aucune condition remplie
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Accès non autorisé: vous devez être propriétaire de la ressource ou avoir un rôle autorisé",
+    )
+
+
 def require_roles(*roles: str, require_all: bool = False):
     """
     Dependency factory for role-based access control.

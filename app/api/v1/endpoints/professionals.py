@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.security import User, get_current_user, require_roles
+from app.core.security import User, get_current_user, require_resource_owner_or_roles, require_roles
 from app.schemas.professional import (
     ProfessionalCreate,
     ProfessionalListResponse,
@@ -106,6 +106,7 @@ async def get_professional(
     response_model=ProfessionalResponse,
     summary="Récupérer un professionnel par Keycloak user ID",
     description="Récupère les détails d'un professionnel par son keycloak_user_id",
+    dependencies=[Depends(require_roles("admin", "professional"))],
 )
 async def get_professional_by_keycloak_id(
     keycloak_user_id: str,
@@ -128,13 +129,7 @@ async def get_professional_by_keycloak_id(
         )
 
     # Vérifier que l'utilisateur accède à son propre profil ou est admin
-    if professional.keycloak_user_id != current_user.sub and "admin" not in (
-        current_user.realm_access or {}
-    ).get("roles", []):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Accès non autorisé à ce profil professionnel",
-        )
+    require_resource_owner_or_roles(professional.keycloak_user_id, current_user)
 
     return ProfessionalResponse.model_validate(professional)
 
@@ -173,6 +168,7 @@ async def get_professional_by_professional_id(
     response_model=ProfessionalResponse,
     summary="Mettre à jour un professionnel",
     description="Met à jour les informations d'un professionnel existant",
+    dependencies=[Depends(require_roles("admin", "professional"))],
 )
 async def update_professional(
     professional_id: int,
@@ -195,14 +191,8 @@ async def update_professional(
             detail=f"Professionnel avec ID {professional_id} non trouvé",
         )
 
-    # Vérifier les permissions
-    if existing_professional.keycloak_user_id != current_user.sub and "admin" not in (
-        current_user.realm_access or {}
-    ).get("roles", []):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Accès non autorisé pour modifier ce profil professionnel",
-        )
+    # Vérifier les permissions: owner OU admin
+    require_resource_owner_or_roles(existing_professional.keycloak_user_id, current_user)
 
     updated_professional = await professional_service.update_professional(
         db=db,
@@ -349,6 +339,7 @@ async def verify_professional(
     response_model=ProfessionalResponse,
     summary="Changer la disponibilité",
     description="Change la disponibilité d'un professionnel pour consultations",
+    dependencies=[Depends(require_roles("admin", "professional"))],
 )
 async def toggle_availability(
     professional_id: int,
@@ -371,14 +362,8 @@ async def toggle_availability(
             detail=f"Professionnel avec ID {professional_id} non trouvé",
         )
 
-    # Vérifier les permissions
-    if professional.keycloak_user_id != current_user.sub and "admin" not in (
-        current_user.realm_access or {}
-    ).get("roles", []):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Accès non autorisé pour modifier la disponibilité",
-        )
+    # Vérifier les permissions: owner OU admin
+    require_resource_owner_or_roles(professional.keycloak_user_id, current_user)
 
     updated_professional = await professional_service.toggle_availability(
         db=db,

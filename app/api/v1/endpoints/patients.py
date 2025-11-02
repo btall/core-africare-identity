@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.security import get_current_user
+from app.core.security import User, get_current_user, require_resource_owner_or_roles, require_roles
 from app.schemas.patient import (
     PatientCreate,
     PatientListResponse,
@@ -101,6 +101,7 @@ async def get_patient(
     response_model=PatientResponse,
     summary="Récupérer un patient par Keycloak user ID",
     description="Récupère les détails d'un patient par son keycloak_user_id",
+    dependencies=[Depends(require_roles("admin", "professional", "patient"))],
 )
 async def get_patient_by_keycloak_id(
     keycloak_user_id: str,
@@ -123,15 +124,9 @@ async def get_patient_by_keycloak_id(
         )
 
     # Vérifier que l'utilisateur accède à son propre profil ou est admin/professional
-    if (
-        patient.keycloak_user_id != current_user.sub
-        and "admin" not in (current_user.realm_access or {}).get("roles", [])
-        and "professional" not in (current_user.realm_access or {}).get("roles", [])
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Accès non autorisé à ce profil patient",
-        )
+    require_resource_owner_or_roles(
+        patient.keycloak_user_id, current_user, additional_roles=["professional"]
+    )
 
     return PatientResponse.model_validate(patient)
 
@@ -141,6 +136,7 @@ async def get_patient_by_keycloak_id(
     response_model=PatientResponse,
     summary="Mettre à jour un patient",
     description="Met à jour les informations d'un patient existant",
+    dependencies=[Depends(require_roles("admin", "professional", "patient"))],
 )
 async def update_patient(
     patient_id: int,
@@ -161,16 +157,10 @@ async def update_patient(
             detail=f"Patient avec ID {patient_id} non trouvé",
         )
 
-    # Vérifier les permissions
-    if (
-        existing_patient.keycloak_user_id != current_user.sub
-        and "admin" not in (current_user.realm_access or {}).get("roles", [])
-        and "professional" not in (current_user.realm_access or {}).get("roles", [])
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Accès non autorisé pour modifier ce profil patient",
-        )
+    # Vérifier les permissions: owner OU admin OU professional
+    require_resource_owner_or_roles(
+        existing_patient.keycloak_user_id, current_user, additional_roles=["professional"]
+    )
 
     updated_patient = await patient_service.update_patient(
         db=db,
