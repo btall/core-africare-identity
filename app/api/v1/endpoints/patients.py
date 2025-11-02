@@ -29,6 +29,7 @@ router = APIRouter()
     status_code=status.HTTP_201_CREATED,
     summary="Créer un nouveau patient",
     description="Crée un nouveau profil patient dans le système",
+    dependencies=[Depends(require_roles("admin", "professional"))],
 )
 async def create_patient(
     patient: PatientCreate,
@@ -193,6 +194,7 @@ async def update_patient(
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Supprimer un patient (soft delete)",
     description="Marque un patient comme inactif (soft delete)",
+    dependencies=[Depends(require_roles("admin"))],
 )
 async def delete_patient(
     patient_id: int,
@@ -204,13 +206,6 @@ async def delete_patient(
 
     Permissions requises : admin uniquement
     """
-    # Vérifier le rôle admin
-    if "admin" not in current_user.get("realm_access", {}).get("roles", []):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Seuls les administrateurs peuvent supprimer des patients",
-        )
-
     deleted = await patient_service.delete_patient(
         db=db,
         patient_id=patient_id,
@@ -229,6 +224,7 @@ async def delete_patient(
     response_model=PatientListResponse,
     summary="Rechercher des patients",
     description="Recherche des patients avec filtres et pagination",
+    dependencies=[Depends(require_roles("admin", "professional"))],
 )
 async def search_patients(
     first_name: str | None = Query(None, description="Filtrer par prénom"),
@@ -244,22 +240,13 @@ async def search_patients(
     skip: int = Query(0, ge=0, description="Nombre d'éléments à sauter"),
     limit: int = Query(20, ge=1, le=100, description="Nombre d'éléments à retourner"),
     db: AsyncSession = Depends(get_session),
-    current_user: dict = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> PatientListResponse:
     """
     Recherche des patients avec filtres et pagination.
 
     Permissions requises : admin ou professional
     """
-    # Vérifier les permissions
-    if "admin" not in current_user.get("realm_access", {}).get(
-        "roles", []
-    ) and "professional" not in current_user.get("realm_access", {}).get("roles", []):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Accès non autorisé à la liste des patients",
-        )
-
     # Construire les filtres
     filters = PatientSearchFilters(
         first_name=first_name,
@@ -292,6 +279,7 @@ async def search_patients(
     response_model=PatientResponse,
     summary="Vérifier un patient",
     description="Marque un patient comme vérifié par un professionnel de santé",
+    dependencies=[Depends(require_roles("admin", "professional"))],
 )
 async def verify_patient(
     patient_id: int,
@@ -303,15 +291,6 @@ async def verify_patient(
 
     Permissions requises : professional ou admin
     """
-    # Vérifier les permissions
-    if "admin" not in current_user.get("realm_access", {}).get(
-        "roles", []
-    ) and "professional" not in current_user.get("realm_access", {}).get("roles", []):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Seuls les professionnels de santé peuvent vérifier des patients",
-        )
-
     verified_patient = await patient_service.verify_patient(
         db=db,
         patient_id=patient_id,
