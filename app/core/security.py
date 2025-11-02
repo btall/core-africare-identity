@@ -43,22 +43,35 @@ class User(BaseModel):
         """Check si l'utilisateur est le propriétaire de la ressource."""
         return self.sub == resource_owner_id
 
-    def verify_access(self, resource_owner_id: str) -> str:
+    def verify_access(self, resource_owner_id: str) -> dict:
         """
-        Vérifie l'accès et retourne la raison pour traçabilité RGPD.
+        Vérifie l'accès et retourne les données d'audit RGPD (minimisation des données).
 
         Returns:
-            "owner" si propriétaire de la ressource
-            "admin_supervision" si admin (pas owner)
+            dict avec:
+            - access_reason: "owner" ou "admin_supervision"
+            - accessed_by: UUID Keycloak de l'accédant (identifiant technique uniquement)
 
         Raises:
             HTTPException 403 si ni owner ni admin
+
+        Usage:
+            audit_data = current_user.verify_access(resource.keycloak_user_id)
+            await publish("audit.access", {
+                "event_type": "resource_accessed",
+                "resource_id": resource.id,
+                **audit_data,  # Spread access_reason, accessed_by
+                "timestamp": datetime.now(UTC).isoformat(),
+            })
+
+        Note RGPD: Seul l'UUID Keycloak est inclus (principe de minimisation).
+                   Les noms/emails/usernames sont exclus des logs d'audit.
         """
         if self.is_owner(resource_owner_id):
-            return "owner"
+            return {"access_reason": "owner", "accessed_by": self.sub}
 
         if self.is_admin:
-            return "admin_supervision"
+            return {"access_reason": "admin_supervision", "accessed_by": self.sub}
 
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

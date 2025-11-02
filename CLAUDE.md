@@ -883,7 +883,9 @@ async def create_example_endpoint(example: ExampleCreate):
 
 ### RGPD Audit Logging
 
-**Pattern complet pour l'audit des accès aux données sensibles:**
+**Pattern DRY avec `verify_access()` retournant les données d'audit complètes:**
+
+La méthode `User.verify_access()` retourne maintenant un dictionnaire avec **toutes les données d'audit RGPD** nécessaires, évitant la répétition de code et garantissant la cohérence.
 
 ```python
 from datetime import datetime, UTC
@@ -901,69 +903,78 @@ async def get_patient(
     if not patient:
         raise HTTPException(status_code=404, detail="Patient non trouvé")
 
-    # Vérification d'accès (retourne la catégorie)
-    access_reason = current_user.verify_access(patient.keycloak_user_id)
+    # Vérification RGPD + récupération des données d'audit
+    audit_data = current_user.verify_access(patient.keycloak_user_id)
+    # ✅ audit_data contient: access_reason, accessed_by (UUID uniquement, minimisation RGPD)
 
-    # Audit RGPD complet avec identité précise
+    # Audit RGPD complet avec spread operator (EN DERNIER)
     await publish("audit.access", {
         "event_type": "patient_record_accessed",
         "resource_type": "patient",
         "resource_id": patient.id,
         "resource_owner_id": patient.keycloak_user_id,
-
-        # IMPORTANT: Identité de l'accédant (QUI)
-        "accessed_by": current_user.sub,  # UUID Keycloak unique
-        "accessed_by_username": current_user.preferred_username,
-        "accessed_by_email": current_user.email,
-
-        # Raison d'accès (POURQUOI)
-        "access_reason": access_reason,  # "owner" ou "admin_supervision"
-
-        # Contexte technique
         "timestamp": datetime.now(UTC).isoformat(),
         "ip_address": request.client.host,
         "user_agent": request.headers.get("user-agent"),
+        **audit_data,  # ⚠️ IMPORTANT: En dernier pour ne pas écraser les champs event-specific
     })
 
     return PatientResponse.model_validate(patient)
 ```
 
-**Distinction importante:**
+**Contenu de `audit_data` (retourné par `verify_access()`):**
 
 | Champ | Purpose | Exemple |
 |-------|---------|---------|
-| `access_reason` | Catégorie d'accès (validation) | `"owner"` ou `"admin_supervision"` |
-| `accessed_by` | Identité précise (traçabilité) | `"550e8400-e29b-41d4-a716-446655440000"` |
+| `access_reason` | Catégorie d'accès (validation légale) | `"owner"` ou `"admin_supervision"` |
+| `accessed_by` | UUID Keycloak (traçabilité, identifiant technique) | `"550e8400-e29b-41d4-a716-446655440000"` |
 
-**Pourquoi les deux sont nécessaires:**
+**Note RGPD - Principe de minimisation des données:**
+Seul l'UUID Keycloak est inclus dans les logs d'audit. Les noms, usernames et emails sont EXCLUS pour respecter le principe de minimisation (Article 5.1.c du RGPD). L'UUID suffit pour la traçabilité technique.
 
-1. **`access_reason`** → Validation d'autorisation
-   - Prouve que l'accès était **légalement autorisé**
-   - Utilisé pour filtrer les logs (ex: voir tous les accès admin)
+**Avantages du pattern DRY:**
 
-2. **`accessed_by`** → Traçabilité RGPD
-   - Prouve **QUI** a accédé (admin-123, admin-456, etc.)
-   - Essentiel pour répondre aux demandes RGPD (Art. 15 - Droit d'accès)
-   - Permet d'identifier un administrateur malveillant
+1. **`verify_access()`** retourne TOUT en un seul appel
+   - Plus de répétition de `current_user.sub`, `current_user.email`, etc.
+   - Cohérence garantie des données d'audit
 
-**❌ Erreur commune à éviter:**
+2. **Spread operator (`**audit_data`)** simplifie le code
+   - Toutes les clés d'audit injectées automatiquement
+   - ⚠️ **IMPORTANT**: Placer `**audit_data` EN DERNIER pour éviter d'écraser les champs event-specific
+   - Code plus lisible et maintenable
+
+3. **Compliance RGPD automatique**
+   - Impossible d'oublier `accessed_by` ou `access_reason`
+   - Pattern uniforme à travers tous les endpoints
+
+**Implémentation de `verify_access()` dans `app/core/security.py`:**
 
 ```python
-# MAUVAIS: On perd l'identité de l'admin
-access_reason = current_user.verify_access(patient.keycloak_user_id)
-# → Retourne "admin_supervision" mais on ne sait pas QUEL admin!
-```
+def verify_access(self, resource_owner_id: str) -> dict:
+    """
+    Vérifie l'accès et retourne les données d'audit RGPD (minimisation des données).
 
-**✅ Pattern correct:**
+    Returns:
+        dict avec:
+        - access_reason: "owner" ou "admin_supervision"
+        - accessed_by: UUID Keycloak de l'accédant (identifiant technique uniquement)
 
-```python
-# BON: Catégorie + Identité
-access_reason = current_user.verify_access(patient.keycloak_user_id)
-await publish("audit.access", {
-    "access_reason": access_reason,      # Catégorie
-    "accessed_by": current_user.sub,     # Identité précise
-    # ... autres champs
-})
+    Raises:
+        HTTPException 403 si ni owner ni admin
+
+    Note RGPD: Seul l'UUID Keycloak est inclus (principe de minimisation).
+               Les noms/emails/usernames sont exclus des logs d'audit.
+    """
+    if self.is_owner(resource_owner_id):
+        return {"access_reason": "owner", "accessed_by": self.sub}
+
+    if self.is_admin:
+        return {"access_reason": "admin_supervision", "accessed_by": self.sub}
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Accès refusé : vous devez être le propriétaire de la ressource",
+    )
 ```
 
 ## Environment Variables Management

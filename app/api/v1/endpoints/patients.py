@@ -123,16 +123,17 @@ async def get_patient_by_keycloak_id(
             detail=f"Patient avec keycloak_user_id {keycloak_user_id} non trouvé",
         )
 
-    # Vérification RGPD explicite : owner OU admin
-    _access_reason = current_user.verify_access(patient.keycloak_user_id)
+    # TODO: Vérification RGPD + données d'audit
+    # audit_data = current_user.verify_access(patient.keycloak_user_id)
     # TODO: await publish("audit.access", {
     #     "event_type": "patient_record_accessed",
     #     "resource_type": "patient",
     #     "resource_id": patient.id,
     #     "resource_owner_id": patient.keycloak_user_id,
-    #     "accessed_by": current_user.sub,  # UUID Keycloak
-    #     "access_reason": _access_reason,  # "owner" ou "admin_supervision"
+    #     **audit_data,  # Spread: access_reason, accessed_by (UUID uniquement, minimisation RGPD)
     #     "timestamp": datetime.now(UTC).isoformat(),
+    #     "ip_address": request.client.host,
+    #     "user_agent": request.headers.get("user-agent"),
     # })
 
     return PatientResponse.model_validate(patient)
@@ -164,16 +165,17 @@ async def update_patient(
             detail=f"Patient avec ID {patient_id} non trouvé",
         )
 
-    # Vérification RGPD explicite : owner OU admin
-    _access_reason = current_user.verify_access(existing_patient.keycloak_user_id)
+    # TODO: Vérification RGPD + données d'audit
+    # audit_data = current_user.verify_access(existing_patient.keycloak_user_id)
     # TODO: await publish("audit.access", {
     #     "event_type": "patient_record_updated",
     #     "resource_type": "patient",
     #     "resource_id": patient_id,
     #     "resource_owner_id": existing_patient.keycloak_user_id,
-    #     "accessed_by": current_user.sub,  # UUID Keycloak
-    #     "access_reason": _access_reason,  # "owner" ou "admin_supervision"
+    #     **audit_data,  # Spread: access_reason, accessed_by (UUID uniquement, minimisation RGPD)
     #     "timestamp": datetime.now(UTC).isoformat(),
+    #     "ip_address": request.client.host,
+    #     "user_agent": request.headers.get("user-agent"),
     # })
 
     updated_patient = await patient_service.update_patient(
