@@ -125,7 +125,15 @@ async def get_patient_by_keycloak_id(
 
     # Vérification RGPD explicite : owner OU admin
     _access_reason = current_user.verify_access(patient.keycloak_user_id)
-    # TODO: audit_log(current_user, "read_patient", patient.id, _access_reason)
+    # TODO: await publish("audit.access", {
+    #     "event_type": "patient_record_accessed",
+    #     "resource_type": "patient",
+    #     "resource_id": patient.id,
+    #     "resource_owner_id": patient.keycloak_user_id,
+    #     "accessed_by": current_user.sub,  # UUID Keycloak
+    #     "access_reason": _access_reason,  # "owner" ou "admin_supervision"
+    #     "timestamp": datetime.now(UTC).isoformat(),
+    # })
 
     return PatientResponse.model_validate(patient)
 
@@ -158,7 +166,15 @@ async def update_patient(
 
     # Vérification RGPD explicite : owner OU admin
     _access_reason = current_user.verify_access(existing_patient.keycloak_user_id)
-    # TODO: audit_log(current_user, "update_patient", patient_id, _access_reason)
+    # TODO: await publish("audit.access", {
+    #     "event_type": "patient_record_updated",
+    #     "resource_type": "patient",
+    #     "resource_id": patient_id,
+    #     "resource_owner_id": existing_patient.keycloak_user_id,
+    #     "accessed_by": current_user.sub,  # UUID Keycloak
+    #     "access_reason": _access_reason,  # "owner" ou "admin_supervision"
+    #     "timestamp": datetime.now(UTC).isoformat(),
+    # })
 
     updated_patient = await patient_service.update_patient(
         db=db,

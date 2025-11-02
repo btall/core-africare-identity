@@ -130,7 +130,15 @@ async def get_professional_by_keycloak_id(
 
     # Vérification RGPD explicite : owner OU admin
     _access_reason = current_user.verify_access(professional.keycloak_user_id)
-    # TODO: audit_log(current_user, "read_professional", professional.id, _access_reason)
+    # TODO: await publish("audit.access", {
+    #     "event_type": "professional_record_accessed",
+    #     "resource_type": "professional",
+    #     "resource_id": professional.id,
+    #     "resource_owner_id": professional.keycloak_user_id,
+    #     "accessed_by": current_user.sub,  # UUID Keycloak
+    #     "access_reason": _access_reason,  # "owner" ou "admin_supervision"
+    #     "timestamp": datetime.now(UTC).isoformat(),
+    # })
 
     return ProfessionalResponse.model_validate(professional)
 
@@ -194,7 +202,15 @@ async def update_professional(
 
     # Vérification RGPD explicite : owner OU admin
     _access_reason = current_user.verify_access(existing_professional.keycloak_user_id)
-    # TODO: audit_log(current_user, "update_professional", professional_id, _access_reason)
+    # TODO: await publish("audit.access", {
+    #     "event_type": "professional_record_updated",
+    #     "resource_type": "professional",
+    #     "resource_id": professional_id,
+    #     "resource_owner_id": existing_professional.keycloak_user_id,
+    #     "accessed_by": current_user.sub,  # UUID Keycloak
+    #     "access_reason": _access_reason,  # "owner" ou "admin_supervision"
+    #     "timestamp": datetime.now(UTC).isoformat(),
+    # })
 
     updated_professional = await professional_service.update_professional(
         db=db,
@@ -366,7 +382,15 @@ async def toggle_availability(
 
     # Vérification RGPD explicite : owner OU admin
     _access_reason = current_user.verify_access(professional.keycloak_user_id)
-    # TODO: await publish("audit.access", {..._access_reason...})
+    # TODO: await publish("audit.access", {
+    #     "event_type": "professional_availability_updated",
+    #     "resource_type": "professional",
+    #     "resource_id": professional_id,
+    #     "resource_owner_id": professional.keycloak_user_id,
+    #     "accessed_by": current_user.sub,  # UUID Keycloak
+    #     "access_reason": _access_reason,  # "owner" ou "admin_supervision"
+    #     "timestamp": datetime.now(UTC).isoformat(),
+    # })
 
     updated_professional = await professional_service.toggle_availability(
         db=db,
