@@ -318,6 +318,259 @@ cookiecutter cookiecutter-africare-microservice \
 | **Latence** | < 5ms | < 50ms |
 | **Complexité** | ✅ Simple | ⚠️ Moyenne |
 
+## Identity Lifecycle Events (RGPD Compliance)
+
+Le service **core-africare-identity** publie des événements de cycle de vie des entités (professionnels, patients) pour permettre aux autres services de maintenir la cohérence des données et respecter les obligations RGPD.
+
+### Architecture Event-Driven pour RGPD
+
+```
+┌─────────────────────────────────────────────────────────┐
+│          core-africare-identity                          │
+│                                                          │
+│  Keycloak Webhook → Soft Delete → Anonymize → Delete    │
+│                         ↓              ↓         ↓       │
+│                   Publish Events                         │
+└─────────────────────────────────────────────────────────┘
+                          ↓
+        ┌─────────────────┼─────────────────┐
+        ↓                 ↓                  ↓
+┌───────────────┐ ┌──────────────┐ ┌─────────────────┐
+│ appointment-  │ │ core-ehr     │ │ core-billing    │
+│ scheduling    │ │              │ │                 │
+│               │ │              │ │                 │
+│ ↓ Annule RDV  │ │ ↓ Anonymise  │ │ ↓ Supprime      │
+│ ↓ Supprime    │ │   dossiers   │ │   factures      │
+│   données     │ │              │ │                 │
+└───────────────┘ └──────────────┘ └─────────────────┘
+```
+
+### Événements Publiés
+
+#### Professional Soft Deleted
+
+**Sujet:** `identity.professional.soft_deleted`
+
+**Quand:** Un professionnel demande la suppression de son compte (droit à l'oubli RGPD)
+
+**Payload:**
+
+```json
+{
+  "professional_keycloak_id": "uuid-string",
+  "deleted_at": "ISO8601 datetime",
+  "reason": "user_request|admin_action|gdpr_compliance",
+  "anonymization_scheduled_at": "ISO8601 datetime"
+}
+```
+
+**Services consommateurs:**
+
+- `apps-africare-appointment-scheduling`: Annule rendez-vous futurs
+- `core-africare-ehr`: Marque dossiers comme soft deleted
+- `core-africare-billing`: Suspend facturation active
+
+**Règle métier:** Période de grâce de **7 jours** avant anonymisation automatique.
+
+#### Professional Anonymized
+
+**Sujet:** `identity.professional.anonymized`
+
+**Quand:** Anonymisation automatique après période de grâce OU anonymisation immédiate demandée
+
+**Payload:**
+
+```json
+{
+  "professional_keycloak_id": "uuid-string",
+  "anonymized_at": "ISO8601 datetime",
+  "deletion_type": "anonymize"
+}
+```
+
+**Services consommateurs:**
+
+- `core-africare-ehr`: Anonymise données médicales
+- `core-africare-billing`: Anonymise historique facturation
+- `core-africare-audit-log`: Marque logs avec professional anonymisé
+
+**Règle métier:** Anonymisation **irréversible** avec hashage bcrypt des données personnelles.
+
+#### Professional Deleted (Hard Delete)
+
+**Sujet:** `identity.professional.deleted`
+
+**Quand:** Suppression physique après anonymisation (nettoyage final)
+
+**Payload:**
+
+```json
+{
+  "professional_keycloak_id": "uuid-string",
+  "deleted_at": "ISO8601 datetime",
+  "deletion_type": "hard"
+}
+```
+
+**Services consommateurs:**
+
+- Tous les services: Suppression complète des données liées
+
+**Règle métier:** Exécuté **après anonymisation** ou pour nettoyage administratif.
+
+#### Professional Restored
+
+**Sujet:** `identity.professional.restored`
+
+**Quand:** Restauration d'un professionnel soft deleted (pendant période de grâce uniquement)
+
+**Payload:**
+
+```json
+{
+  "professional_keycloak_id": "uuid-string",
+  "restore_reason": "string",
+  "restored_at": "ISO8601 datetime"
+}
+```
+
+**Services consommateurs:**
+
+- `core-africare-ehr`: Réactive dossiers (décision métier service-specific)
+- `apps-africare-appointment-scheduling`: **NE réactive PAS** rendez-vous annulés
+
+**Règle métier:** Impossible après anonymisation (anonymisation = irréversible).
+
+#### Patient Soft Deleted
+
+**Sujet:** `identity.patient.soft_deleted`
+
+**Quand:** Un patient demande la suppression de son compte
+
+**Payload:**
+
+```json
+{
+  "patient_keycloak_id": "uuid-string",
+  "deleted_at": "ISO8601 datetime",
+  "reason": "user_request|admin_action|gdpr_compliance",
+  "anonymization_scheduled_at": "ISO8601 datetime"
+}
+```
+
+**Services consommateurs:**
+
+- `apps-africare-appointment-scheduling`: Annule rendez-vous futurs
+- `core-africare-ehr`: Marque dossiers comme soft deleted
+
+**Règle métier:** Période de grâce de **7 jours** avant anonymisation automatique.
+
+#### Patient Anonymized
+
+**Sujet:** `identity.patient.anonymized`
+
+**Quand:** Anonymisation automatique après période de grâce
+
+**Payload:**
+
+```json
+{
+  "patient_keycloak_id": "uuid-string",
+  "anonymized_at": "ISO8601 datetime",
+  "deletion_type": "anonymize"
+}
+```
+
+**Services consommateurs:**
+
+- `core-africare-ehr`: Anonymise données médicales
+- `apps-africare-appointment-scheduling`: Supprime données patient
+
+**Règle métier:** Anonymisation **irréversible**.
+
+#### Patient Deleted (Hard Delete)
+
+**Sujet:** `identity.patient.deleted`
+
+**Quand:** Suppression physique après anonymisation
+
+**Payload:**
+
+```json
+{
+  "patient_keycloak_id": "uuid-string",
+  "deleted_at": "ISO8601 datetime",
+  "deletion_type": "hard"
+}
+```
+
+**Services consommateurs:**
+
+- Tous les services: Suppression complète des données liées
+- `apps-africare-appointment-scheduling`: Supprime rendez-vous et waiting list
+
+**Règle métier:** Exécuté **après anonymisation**.
+
+### Implémentation
+
+#### Publication (core-africare-identity)
+
+```python
+# app/services/keycloak_sync_service.py
+from app.core.events import publish
+from datetime import UTC, datetime, timedelta
+
+async def _soft_delete(entity: Professional | Patient, event: KeycloakWebhookEvent):
+    """Soft delete avec période de grâce de 7 jours."""
+    entity.is_active = False
+    entity.soft_deleted_at = datetime.now(UTC)
+    entity.deletion_reason = event.deletion_reason or "user_request"
+
+    entity_type = "professional" if isinstance(entity, Professional) else "patient"
+    await publish(f"identity.{entity_type}.soft_deleted", {
+        f"{entity_type}_keycloak_id": entity.keycloak_user_id,
+        "deleted_at": entity.soft_deleted_at.isoformat(),
+        "reason": entity.deletion_reason,
+        "anonymization_scheduled_at": (entity.soft_deleted_at + timedelta(days=7)).isoformat()
+    })
+```
+
+#### Consommation (autres services)
+
+```python
+# apps-africare-appointment-scheduling/app/services/event_service.py
+from app.core.events import subscribe
+
+@subscribe("identity.professional.soft_deleted")
+async def handle_professional_soft_deleted(payload: dict):
+    """Annule tous les rendez-vous futurs du professionnel."""
+    professional_keycloak_id = payload.get("professional_keycloak_id")
+
+    # Annuler rendez-vous futurs
+    future_appointments = await get_future_appointments(professional_keycloak_id)
+    for appointment in future_appointments:
+        await cancel_appointment(appointment.id, reason="Professionnel supprimé")
+
+    # Publier événements de confirmation
+    for appointment in future_appointments:
+        await publish("appointment.cancelled", {...})
+```
+
+### Tests
+
+Les événements sont testés avec:
+
+- **core-africare-identity**: `tests/unit/test_identity_event_publishing.py` (12 tests)
+- **apps-africare-appointment-scheduling**: `tests/test_identity_event_handlers.py` (13 tests)
+
+### Règles RGPD
+
+1. **Droit à l'oubli**: Soft delete → période de grâce 7 jours → anonymisation automatique
+2. **Anonymisation irréversible**: Hashage bcrypt des données personnelles
+3. **Cascading deletions**: Tous les services doivent réagir aux événements
+4. **Audit trail**: Tous les événements tracés dans core-africare-audit-log
+5. **Blocage enquête**: Professionnels sous enquête médico-légale ne peuvent pas être supprimés
+
 ## Troubleshooting
 
 ### Problème : Événements Non Reçus
