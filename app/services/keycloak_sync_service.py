@@ -986,6 +986,18 @@ async def _soft_delete(entity: Patient | Professional, event: KeycloakWebhookEve
         },
     )
 
+    # STEP 3: Publier événement de soft deletion
+    entity_type_str = "professional" if isinstance(entity, Professional) else "patient"
+    await publish(
+        f"identity.{entity_type_str}.soft_deleted",
+        {
+            f"{entity_type_str}_keycloak_id": entity.keycloak_user_id,
+            "deleted_at": now.isoformat(),
+            "reason": entity.deletion_reason,
+            "anonymization_scheduled_at": (now + timedelta(days=7)).isoformat(),
+        },
+    )
+
 
 async def _anonymize(
     entity: Patient | Professional,
@@ -1072,6 +1084,16 @@ async def _anonymize(
 
     logger.info(f"{entity.__class__.__name__} anonymisé: {entity_id}")
 
+    # Publier événement d'anonymisation
+    await publish(
+        f"identity.{entity_type}.anonymized",
+        {
+            f"{entity_type}_keycloak_id": entity.keycloak_user_id,
+            "anonymized_at": datetime.now().isoformat(),
+            "deletion_type": "anonymize",
+        },
+    )
+
 
 def _anonymize_entity(entity: Patient | Professional) -> None:
     """
@@ -1154,8 +1176,21 @@ async def _hard_delete(db: AsyncSession, entity: Patient | Professional) -> None
     À utiliser uniquement dans des contextes non-médicaux ou après anonymisation
     des données médicales dans les autres services.
     """
+    from datetime import UTC
+
     entity_id = entity.id
     entity_type = entity.__class__.__name__
+    entity_type_str = "professional" if isinstance(entity, Professional) else "patient"
+
+    # Publier événement avant la suppression physique
+    await publish(
+        f"identity.{entity_type_str}.deleted",
+        {
+            f"{entity_type_str}_keycloak_id": entity.keycloak_user_id,
+            "deleted_at": datetime.now(UTC).isoformat(),
+            "deletion_type": "hard",
+        },
+    )
 
     await db.delete(entity)
     logger.warning(f"Hard delete {entity_type}: {entity_id}")

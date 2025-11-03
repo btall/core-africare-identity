@@ -189,8 +189,7 @@ async def restore_soft_deleted_professional(
     await publish(
         "identity.professional.restored",
         {
-            "professional_id": professional.id,
-            "keycloak_user_id": professional.keycloak_user_id,
+            "professional_keycloak_id": professional.keycloak_user_id,
             "restore_reason": restore_request.restore_reason,
             "restored_at": datetime.now(UTC).isoformat(),
         },
