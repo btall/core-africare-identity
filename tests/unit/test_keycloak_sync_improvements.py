@@ -87,7 +87,9 @@ class TestAnonymization:
         event = MagicMock(spec=KeycloakWebhookEvent)
         event.user_id = "user-789"
 
-        await _anonymize(patient, event, "patient")
+        # Mock publish() pour éviter l'erreur Redis
+        with patch("app.services.keycloak_sync_service.publish"):
+            await _anonymize(patient, event, "patient")
 
         # Les données NE DOIVENT PAS être en clair
         assert not patient.first_name.startswith("ANONYME_")  # Devrait être hashé
@@ -133,7 +135,9 @@ class TestAnonymization:
         event = MagicMock(spec=KeycloakWebhookEvent)
         event.user_id = "user-pro-123"
 
-        await _anonymize(professional, event, "professional")
+        # Mock publish() pour éviter l'erreur Redis
+        with patch("app.services.keycloak_sync_service.publish"):
+            await _anonymize(professional, event, "professional")
 
         # Vérifier hash (pas en clair)
         assert professional.first_name.startswith("$2") or len(professional.first_name) == 60
