@@ -1,7 +1,7 @@
 """Tests pour le système de corrélation hash des patients."""
 
 import hashlib
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -83,7 +83,7 @@ async def test_check_returning_patient_found(db_session):
         email="$2b$12$hashed",
         phone="+ANONYMIZED",
         gender="male",
-        date_of_birth="1990-01-01",
+        date_of_birth=date(1990, 1, 1),
         country="Anonymisé",
         preferred_language="fr",
         is_active=False,
@@ -130,7 +130,7 @@ async def test_check_returning_patient_not_anonymized_yet(db_session):
         email=email,
         phone="+221771234567",
         gender="male",
-        date_of_birth="1990-01-01",
+        date_of_birth=date(1990, 1, 1),
         country="Sénégal",
         preferred_language="fr",
         is_active=False,
@@ -161,7 +161,7 @@ async def test_check_returning_patient_without_national_id(db_session):
         email="$2b$12$hashed",
         phone="+ANONYMIZED",
         gender="female",
-        date_of_birth="1985-01-01",
+        date_of_birth=date(1985, 1, 1),
         country="Anonymisé",
         preferred_language="fr",
         is_active=False,

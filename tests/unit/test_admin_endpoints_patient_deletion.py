@@ -1,6 +1,6 @@
 """Tests pour les endpoints administrateur de gestion des suppressions patients."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -28,7 +28,7 @@ async def test_mark_patient_under_investigation(mock_events, db_session):
         email="amadou.diallo@example.sn",
         phone="+221771234567",
         gender="male",
-        date_of_birth="1990-05-15",
+        date_of_birth=date(1990, 5, 15),
         country="Sénégal",
         preferred_language="fr",
         is_active=True,
@@ -65,7 +65,7 @@ async def test_remove_investigation_status(mock_events, db_session):
         email="fatou.sall@example.sn",
         phone="+221771234567",
         gender="female",
-        date_of_birth="1985-08-20",
+        date_of_birth=date(1985, 8, 20),
         country="Sénégal",
         preferred_language="fr",
         is_active=True,
@@ -102,7 +102,7 @@ async def test_restore_soft_deleted_patient(mock_events, db_session):
         email="moussa.ndiaye@example.sn",
         phone="+221771234567",
         gender="male",
-        date_of_birth="1992-03-10",
+        date_of_birth=date(1992, 3, 10),
         country="Sénégal",
         preferred_language="fr",
         is_active=False,
@@ -142,7 +142,7 @@ async def test_restore_fails_if_already_anonymized(mock_events, db_session):
         email="$2b$12$hashedemail",
         phone="+ANONYMIZED",
         gender="male",
-        date_of_birth="1980-01-01",
+        date_of_birth=date(1980, 1, 1),
         country="Anonymisé",
         preferred_language="fr",
         is_active=False,
@@ -180,7 +180,7 @@ async def test_list_soft_deleted_patients(mock_events, db_session):
         email="awa.thiam@example.sn",
         phone="+221771111111",
         gender="female",
-        date_of_birth="1995-12-25",
+        date_of_birth=date(1995, 12, 25),
         country="Sénégal",
         preferred_language="fr",
         is_active=True,
@@ -193,7 +193,7 @@ async def test_list_soft_deleted_patients(mock_events, db_session):
         email="ibrahima.sy@example.sn",
         phone="+221772222222",
         gender="male",
-        date_of_birth="1988-07-14",
+        date_of_birth=date(1988, 7, 14),
         country="Sénégal",
         preferred_language="fr",
         is_active=False,
@@ -207,7 +207,7 @@ async def test_list_soft_deleted_patients(mock_events, db_session):
         email="$2b$12$hashed",
         phone="+ANONYMIZED",
         gender="other",
-        date_of_birth="1970-01-01",
+        date_of_birth=date(1970, 1, 1),
         country="Anonymisé",
         preferred_language="fr",
         is_active=False,
