@@ -5,7 +5,7 @@ entre les événements Keycloak et la base de données locale.
 """
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 import bcrypt
@@ -17,7 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.events import publish
-from app.core.exceptions import AnonymizationError, KeycloakServiceError
+from app.core.exceptions import (
+    AnonymizationError,
+    KeycloakServiceError,
+    ProfessionalDeletionBlockedError,
+)
 from app.core.retry import async_retry_with_backoff
 from app.models.patient import Patient
 from app.models.professional import Professional
@@ -169,6 +173,40 @@ async def sync_user_registration(db: AsyncSession, event: KeycloakWebhookEvent) 
                 is_provider = event.client_id == "apps-africare-provider-portal"
 
             if is_provider:
+                # DETECT: Vérifier si professionnel revient après anonymisation
+                email = event.user.email if event.user else None
+                professional_id = None  # TODO: Extraire de user attributes si disponible
+
+                if email:
+                    returning_professional = await _check_returning_professional(
+                        db, email, professional_id
+                    )
+                    if returning_professional:
+                        logger.info(
+                            f"Professionnel revenant détecté: {returning_professional.id} "
+                            f"(correlation_hash={returning_professional.correlation_hash})"
+                        )
+                        # Publier événement de retour
+                        await publish(
+                            "identity.professional.returning_user",
+                            {
+                                "old_professional_id": returning_professional.id,
+                                "new_keycloak_user_id": event.user_id,
+                                "correlation_hash": returning_professional.correlation_hash,
+                                "old_soft_deleted_at": (
+                                    returning_professional.soft_deleted_at.isoformat()
+                                    if returning_professional.soft_deleted_at
+                                    else None
+                                ),
+                                "old_anonymized_at": (
+                                    returning_professional.anonymized_at.isoformat()
+                                    if returning_professional.anonymized_at
+                                    else None
+                                ),
+                                "detected_at": datetime.now(UTC).isoformat(),
+                            },
+                        )
+
                 # Créer un profil Professional
                 professional = await _create_professional_from_event(db, event)
                 await db.commit()
@@ -629,6 +667,77 @@ async def _create_professional_from_event(
 ################################################################################
 
 
+def _generate_correlation_hash(email: str, professional_id: str | None) -> str:
+    """
+    Génère un hash de corrélation SHA-256 déterministe pour détecter retours après anonymisation.
+
+    Le hash est calculé à partir de email + professional_id + salt global, permettant
+    de détecter si un professionnel revient après anonymisation sans stocker les données
+    personnelles en clair (conformité RGPD).
+
+    Args:
+        email: Email du professionnel avant anonymisation
+        professional_id: Numéro d'ordre professionnel (peut être None)
+
+    Returns:
+        Hash SHA-256 hexadécimal (64 caractères)
+
+    Example:
+        >>> hash = _generate_correlation_hash("dr.diop@hospital.sn", "CNOM12345")
+        >>> len(hash)
+        64
+    """
+    import hashlib
+
+    from app.core.config import settings
+
+    # Salt global depuis configuration (ou défaut si non défini)
+    salt = getattr(settings, "CORRELATION_HASH_SALT", "africare-identity-salt-v1")
+
+    # Construire la chaîne à hasher
+    hash_input = f"{email}|{professional_id or ''}|{salt}"
+
+    # Générer SHA-256
+    return hashlib.sha256(hash_input.encode("utf-8")).hexdigest()
+
+
+async def _check_returning_professional(
+    db: AsyncSession, email: str, professional_id: str | None
+) -> Professional | None:
+    """
+    Vérifie si un professionnel anonymisé revient en calculant son correlation_hash.
+
+    Cette fonction permet de détecter les professionnels qui reviennent après suppression
+    en comparant le hash calculé avec ceux stockés dans la base.
+
+    Args:
+        db: Session de base de données async
+        email: Email du nouveau professionnel
+        professional_id: Numéro d'ordre professionnel (peut être None)
+
+    Returns:
+        Professionnel anonymisé correspondant si trouvé, None sinon
+
+    Example:
+        ```python
+        returning = await _check_returning_professional(db, "dr.diop@hospital.sn", "CNOM12345")
+        if returning:
+            logger.info(f"Professionnel revenant détecté: {returning.id}")
+        ```
+    """
+    # Générer le hash pour ce professionnel
+    correlation_hash = _generate_correlation_hash(email, professional_id)
+
+    # Chercher professionnel avec ce hash (uniquement anonymisés)
+    result = await db.execute(
+        select(Professional).where(
+            Professional.correlation_hash == correlation_hash,
+            Professional.anonymized_at.isnot(None),  # Seulement les anonymisés
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 @async_retry_with_backoff(
     max_attempts=3,
     min_wait_seconds=1,
@@ -818,20 +927,76 @@ async def _apply_deletion_strategy(
 
 async def _soft_delete(entity: Patient | Professional, event: KeycloakWebhookEvent) -> None:
     """
-    Soft delete: Marque l'entité comme supprimée sans effacer les données.
+    Soft delete avec période de grâce de 7 jours.
 
-    - is_active = False
-    - deleted_at = maintenant
-    - deleted_by = user_id (auto-suppression)
-    - deletion_reason = user_request
+    Workflow:
+    1. Vérifie si professional sous enquête (bloque si true)
+    2. Génère correlation_hash AVANT anonymisation (pour détection retours)
+    3. Marque comme inactif avec soft_deleted_at
+    4. Anonymisation effective après 7 jours (scheduler)
+
+    Raises:
+        ProfessionalDeletionBlockedError: Si professional.under_investigation=True
     """
-    entity.is_active = False
-    entity.deleted_at = datetime.now()
-    entity.deleted_by = event.user_id
-    entity.deletion_reason = "user_request"
-    entity.updated_at = datetime.now()
+    from datetime import UTC
 
-    logger.info(f"Soft delete {entity.__class__.__name__}: {entity.id}")
+    # CHECK: Bloquer si professionnel sous enquête
+    if isinstance(entity, Professional) and entity.under_investigation:
+        logger.error(
+            f"Soft delete bloqué pour Professional {entity.id}: under_investigation=True",
+            extra={"investigation_notes": entity.investigation_notes},
+        )
+        raise ProfessionalDeletionBlockedError(
+            professional_id=entity.id,
+            reason="under_investigation",
+            investigation_notes=entity.investigation_notes,
+        )
+
+    # CHECK: Déjà soft deleted ou anonymisé
+    if hasattr(entity, "soft_deleted_at") and entity.soft_deleted_at is not None:
+        logger.warning(f"{entity.__class__.__name__} {entity.id} already soft deleted")
+        return
+    if hasattr(entity, "anonymized_at") and entity.anonymized_at is not None:
+        logger.warning(f"{entity.__class__.__name__} {entity.id} already anonymized")
+        return
+
+    # STEP 1: Générer correlation_hash AVANT anonymisation (pour professionnels)
+    if isinstance(entity, Professional):
+        if not entity.correlation_hash:
+            entity.correlation_hash = _generate_correlation_hash(
+                entity.email, entity.professional_id
+            )
+            logger.info(
+                f"Generated correlation_hash for Professional {entity.id}",
+                extra={"correlation_hash": entity.correlation_hash},
+            )
+
+    # STEP 2: Soft delete avec période de grâce
+    now = datetime.now(UTC)
+    entity.is_active = False
+    entity.soft_deleted_at = now
+    entity.deletion_reason = event.deletion_reason or "user_request"
+    entity.updated_at = now
+
+    logger.info(
+        f"Soft delete {entity.__class__.__name__}: {entity.id} (grace period: 7 days)",
+        extra={
+            "soft_deleted_at": now.isoformat(),
+            "anonymization_scheduled": (now + timedelta(days=7)).isoformat(),
+        },
+    )
+
+    # STEP 3: Publier événement de soft deletion
+    entity_type_str = "professional" if isinstance(entity, Professional) else "patient"
+    await publish(
+        f"identity.{entity_type_str}.soft_deleted",
+        {
+            f"{entity_type_str}_keycloak_id": entity.keycloak_user_id,
+            "deleted_at": now.isoformat(),
+            "reason": entity.deletion_reason,
+            "anonymization_scheduled_at": (now + timedelta(days=7)).isoformat(),
+        },
+    )
 
 
 async def _anonymize(
@@ -874,7 +1039,8 @@ async def _anonymize(
         entity.email = bcrypt.hashpw(f"deleted_{entity_id}@anonymized.local".encode(), salt).decode(
             "utf-8"
         )
-        entity.phone = None
+        # Phone est NOT NULL pour Professional, utiliser placeholder
+        entity.phone = "+ANONYMIZED"
     except Exception as e:
         logger.error(f"Échec du hashing bcrypt pour {entity_type} {entity_id}: {e}")
         raise AnonymizationError(
@@ -918,6 +1084,89 @@ async def _anonymize(
 
     logger.info(f"{entity.__class__.__name__} anonymisé: {entity_id}")
 
+    # Publier événement d'anonymisation
+    await publish(
+        f"identity.{entity_type}.anonymized",
+        {
+            f"{entity_type}_keycloak_id": entity.keycloak_user_id,
+            "anonymized_at": datetime.now().isoformat(),
+            "deletion_type": "anonymize",
+        },
+    )
+
+
+def _anonymize_entity(entity: Patient | Professional) -> None:
+    """
+    Anonymise une entité (Patient ou Professional) sans événement Keycloak.
+
+    Version simplifiée de _anonymize() pour usage par le scheduler.
+    Utilisée par anonymization_scheduler pour anonymiser après période de grâce.
+
+    Args:
+        entity: Instance Patient ou Professional à anonymiser
+
+    Raises:
+        AnonymizationError: Si le hashing bcrypt échoue
+    """
+    from datetime import UTC
+
+    entity_id = entity.id
+    entity_type = "professional" if isinstance(entity, Professional) else "patient"
+
+    try:
+        # Générer un salt unique pour chaque valeur
+        salt = bcrypt.gensalt()
+
+        # Hasher les données sensibles avec bcrypt (irréversible)
+        entity.first_name = bcrypt.hashpw(f"ANONYME_{entity_id}".encode(), salt).decode("utf-8")
+        entity.last_name = bcrypt.hashpw(
+            f"{entity_type.upper()}_{entity_id}".encode(), salt
+        ).decode("utf-8")
+        entity.email = bcrypt.hashpw(f"deleted_{entity_id}@anonymized.local".encode(), salt).decode(
+            "utf-8"
+        )
+        # Phone est NOT NULL pour Professional, utiliser placeholder
+        entity.phone = "+ANONYMIZED"
+    except Exception as e:
+        logger.error(f"Échec du hashing bcrypt pour {entity_type} {entity_id}: {e}")
+        raise AnonymizationError(
+            detail=f"Failed to anonymize {entity_type} {entity_id}: bcrypt hashing failed",
+            instance=f"/{entity_type}s/{entity_id}/anonymize",
+        ) from e
+
+    # Données spécifiques aux patients
+    if isinstance(entity, Patient):
+        entity.phone_secondary = None
+        entity.national_id = None
+        entity.address_line1 = None
+        entity.address_line2 = None
+        entity.city = None
+        entity.region = None
+        entity.postal_code = None
+        entity.latitude = None
+        entity.longitude = None
+        entity.emergency_contact_name = None
+        entity.emergency_contact_phone = None
+        entity.notes = "[DONNEES ANONYMISEES CONFORMEMENT RGPD]"
+
+    # Données spécifiques aux professionnels
+    if isinstance(entity, Professional):
+        entity.phone_secondary = None
+        entity.professional_id = None
+        entity.facility_name = None
+        entity.facility_address = None
+        entity.facility_city = None
+        entity.facility_region = None
+        entity.qualifications = "[DONNEES ANONYMISEES CONFORMEMENT RGPD]"
+        entity.notes = "[DONNEES ANONYMISEES CONFORMEMENT RGPD]"
+        entity.digital_signature = None
+
+    # Marquer comme inactif (déjà fait par soft_delete, mais par sécurité)
+    entity.is_active = False
+    entity.updated_at = datetime.now(UTC)
+
+    logger.info(f"{entity.__class__.__name__} anonymisé: {entity_id}")
+
 
 async def _hard_delete(db: AsyncSession, entity: Patient | Professional) -> None:
     """
@@ -927,8 +1176,21 @@ async def _hard_delete(db: AsyncSession, entity: Patient | Professional) -> None
     À utiliser uniquement dans des contextes non-médicaux ou après anonymisation
     des données médicales dans les autres services.
     """
+    from datetime import UTC
+
     entity_id = entity.id
     entity_type = entity.__class__.__name__
+    entity_type_str = "professional" if isinstance(entity, Professional) else "patient"
+
+    # Publier événement avant la suppression physique
+    await publish(
+        f"identity.{entity_type_str}.deleted",
+        {
+            f"{entity_type_str}_keycloak_id": entity.keycloak_user_id,
+            "deleted_at": datetime.now(UTC).isoformat(),
+            "deletion_type": "hard",
+        },
+    )
 
     await db.delete(entity)
     logger.warning(f"Hard delete {entity_type}: {entity_id}")

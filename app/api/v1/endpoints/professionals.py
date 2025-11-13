@@ -229,6 +229,7 @@ async def update_professional(
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Supprimer un professionnel (soft delete)",
     description="Marque un professionnel comme inactif (soft delete)",
+    dependencies=[Depends(require_roles("admin"))],
 )
 async def delete_professional(
     professional_id: int,
@@ -240,13 +241,6 @@ async def delete_professional(
 
     Permissions requises : admin uniquement
     """
-    # Vérifier le rôle admin
-    if "admin" not in current_user.get("realm_access", {}).get("roles", []):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Seuls les administrateurs peuvent supprimer des professionnels",
-        )
-
     deleted = await professional_service.delete_professional(
         db=db,
         professional_id=professional_id,
@@ -321,6 +315,7 @@ async def search_professionals(
     response_model=ProfessionalResponse,
     summary="Vérifier un professionnel",
     description="Marque un professionnel comme vérifié par un administrateur",
+    dependencies=[Depends(require_roles("admin"))],
 )
 async def verify_professional(
     professional_id: int,
@@ -332,13 +327,6 @@ async def verify_professional(
 
     Permissions requises : admin uniquement
     """
-    # Vérifier les permissions
-    if "admin" not in current_user.get("realm_access", {}).get("roles", []):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Seuls les administrateurs peuvent vérifier des professionnels",
-        )
-
     verified_professional = await professional_service.verify_professional(
         db=db,
         professional_id=professional_id,

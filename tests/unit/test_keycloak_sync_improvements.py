@@ -87,7 +87,9 @@ class TestAnonymization:
         event = MagicMock(spec=KeycloakWebhookEvent)
         event.user_id = "user-789"
 
-        await _anonymize(patient, event, "patient")
+        # Mock publish() pour éviter l'erreur Redis
+        with patch("app.services.keycloak_sync_service.publish"):
+            await _anonymize(patient, event, "patient")
 
         # Les données NE DOIVENT PAS être en clair
         assert not patient.first_name.startswith("ANONYME_")  # Devrait être hashé
@@ -101,7 +103,8 @@ class TestAnonymization:
         )
 
         # Autres champs doivent être None (pas de données en clair)
-        assert patient.phone is None
+        # Phone utilise placeholder car NOT NULL pour Professional
+        assert patient.phone == "+ANONYMIZED"
         assert patient.national_id is None
 
         # Marqueurs RGPD OK
@@ -132,14 +135,17 @@ class TestAnonymization:
         event = MagicMock(spec=KeycloakWebhookEvent)
         event.user_id = "user-pro-123"
 
-        await _anonymize(professional, event, "professional")
+        # Mock publish() pour éviter l'erreur Redis
+        with patch("app.services.keycloak_sync_service.publish"):
+            await _anonymize(professional, event, "professional")
 
         # Vérifier hash (pas en clair)
         assert professional.first_name.startswith("$2") or len(professional.first_name) == 60
         assert professional.last_name.startswith("$2") or len(professional.last_name) == 60
 
         # Données supprimées
-        assert professional.phone is None
+        # Phone utilise placeholder car NOT NULL pour Professional
+        assert professional.phone == "+ANONYMIZED"
         assert professional.professional_id is None
 
         # Marqueurs RGPD

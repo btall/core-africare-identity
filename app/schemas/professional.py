@@ -224,3 +224,76 @@ class ProfessionalListResponse(BaseModel):
     total: int = Field(..., ge=0, description="Nombre total de résultats")
     skip: int = Field(..., ge=0, description="Nombre d'éléments sautés")
     limit: int = Field(..., ge=1, description="Limite par page")
+
+
+# =============================================================================
+# Schémas pour gestion suppression/restauration
+# =============================================================================
+
+DeletionReason = Literal[
+    "user_request",
+    "admin_termination",
+    "professional_revocation",
+    "gdpr_compliance",
+    "prolonged_inactivity",
+]
+
+
+class ProfessionalDeletionRequest(BaseModel):
+    """Requête de suppression de professionnel (admin uniquement)."""
+
+    deletion_reason: DeletionReason = Field(
+        ...,
+        description="Raison de la suppression",
+        examples=["admin_termination"],
+    )
+    investigation_check_override: bool = Field(
+        default=False,
+        description="Forcer suppression même si under_investigation=True (admin seulement)",
+    )
+    notes: str | None = Field(
+        None, max_length=1000, description="Notes administratives sur la suppression"
+    )
+
+
+class ProfessionalRestoreRequest(BaseModel):
+    """Requête de restauration de professionnel en période de grâce (admin uniquement)."""
+
+    restore_reason: NonEmptyStr = Field(
+        ...,
+        description="Raison de la restauration",
+        examples=["Erreur administrative", "Professionnel réintégré"],
+    )
+    notes: str | None = Field(
+        None, max_length=1000, description="Notes administratives sur la restauration"
+    )
+
+
+class ProfessionalInvestigationUpdate(BaseModel):
+    """Requête de mise à jour du statut d'enquête (admin uniquement)."""
+
+    under_investigation: bool = Field(..., description="Professionnel sous enquête médico-légale")
+    investigation_notes: str | None = Field(
+        None, max_length=1000, description="Notes sur l'enquête en cours"
+    )
+
+
+class ProfessionalDeletionContext(BaseModel):
+    """Contexte de suppression pour endpoints administrateur."""
+
+    reason: str | None = Field(
+        None, max_length=1000, description="Raison ou notes sur l'action administrative"
+    )
+
+
+class AnonymizationStatus(BaseModel):
+    """Statut d'anonymisation pour un professionnel soft deleted."""
+
+    professional_id: ProfessionalId = Field(..., description="ID du professionnel")
+    keycloak_user_id: str = Field(..., description="Keycloak user ID")
+    email: str = Field(..., description="Email (potentiellement anonymisé)")
+    soft_deleted_at: datetime | None = Field(None, description="Date de soft delete")
+    anonymized_at: datetime | None = Field(None, description="Date d'anonymisation")
+    deletion_reason: DeletionReason | None = Field(None, description="Raison de la suppression")
+
+    model_config = {"from_attributes": True}

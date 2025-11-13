@@ -8,6 +8,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.endpoints.professionals import create_professional
+from app.core.security import User
 from app.models.professional import Professional
 from app.schemas.professional import ProfessionalCreate
 
@@ -34,7 +35,7 @@ class TestProfessionalIntegrityErrors:
         )
 
         db = AsyncMock()
-        current_user = {"sub": "admin-123"}
+        current_user = User(sub="admin-123", realm_access={"roles": ["admin"]})
 
         # Simuler une IntegrityError pour email dupliqué
         with patch("app.services.professional_service.create_professional") as mock_create:
@@ -70,7 +71,7 @@ class TestProfessionalIntegrityErrors:
         )
 
         db = AsyncMock()
-        current_user = {"sub": "admin-456"}
+        current_user = User(sub="admin-456", realm_access={"roles": ["admin"]})
 
         with patch("app.services.professional_service.create_professional") as mock_create:
             mock_create.side_effect = IntegrityError(
@@ -105,7 +106,7 @@ class TestProfessionalIntegrityErrors:
         )
 
         db = AsyncMock()
-        current_user = {"sub": "admin-789"}
+        current_user = User(sub="admin-789", realm_access={"roles": ["admin"]})
 
         with patch("app.services.professional_service.create_professional") as mock_create:
             mock_create.side_effect = IntegrityError(
@@ -143,7 +144,7 @@ class TestProfessionalIntegrityErrors:
         )
 
         db = AsyncMock()
-        current_user = {"sub": "admin-999"}
+        current_user = User(sub="admin-999", realm_access={"roles": ["admin"]})
 
         # Créer un objet Professional réel (pas un mock)
         mock_professional = Professional(

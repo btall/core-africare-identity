@@ -7,6 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 
 from app.api.v1.endpoints.patients import create_patient
+from app.core.security import User
 from app.schemas.patient import PatientCreate
 
 
@@ -29,7 +30,7 @@ class TestPatientIntegrityErrors:
         )
 
         db = AsyncMock()
-        current_user = {"sub": "admin-123"}
+        current_user = User(sub="admin-123", realm_access={"roles": ["admin"]})
 
         # Simuler une IntegrityError pour email dupliqué
         with patch("app.services.patient_service.create_patient") as mock_create:
@@ -62,7 +63,7 @@ class TestPatientIntegrityErrors:
         )
 
         db = AsyncMock()
-        current_user = {"sub": "admin-456"}
+        current_user = User(sub="admin-456", realm_access={"roles": ["admin"]})
 
         with patch("app.services.patient_service.create_patient") as mock_create:
             mock_create.side_effect = IntegrityError(
@@ -95,7 +96,7 @@ class TestPatientIntegrityErrors:
         )
 
         db = AsyncMock()
-        current_user = {"sub": "admin-789"}
+        current_user = User(sub="admin-789", realm_access={"roles": ["admin"]})
 
         with patch("app.services.patient_service.create_patient") as mock_create:
             mock_create.side_effect = IntegrityError(
@@ -134,7 +135,7 @@ class TestPatientIntegrityErrors:
         )
 
         db = AsyncMock()
-        current_user = {"sub": "admin-999"}
+        current_user = User(sub="admin-999", realm_access={"roles": ["admin"]})
 
         # Créer un objet Patient réel (pas un mock)
         mock_patient = Patient(
