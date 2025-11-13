@@ -1033,27 +1033,40 @@ async def _soft_delete(entity: Patient | Professional, event: KeycloakWebhookEve
     Soft delete avec période de grâce de 7 jours.
 
     Workflow:
-    1. Vérifie si professional sous enquête (bloque si true)
+    1. Vérifie si professional/patient sous enquête (bloque si true)
     2. Génère correlation_hash AVANT anonymisation (pour détection retours)
     3. Marque comme inactif avec soft_deleted_at
     4. Anonymisation effective après 7 jours (scheduler)
 
     Raises:
         ProfessionalDeletionBlockedError: Si professional.under_investigation=True
+        PatientDeletionBlockedError: Si patient.under_investigation=True
     """
     from datetime import UTC
 
-    # CHECK: Bloquer si professionnel sous enquête
-    if isinstance(entity, Professional) and entity.under_investigation:
+    from app.core.exceptions import PatientDeletionBlockedError
+
+    # CHECK: Bloquer si entité sous enquête
+    if hasattr(entity, "under_investigation") and entity.under_investigation:
+        entity_type = "Professional" if isinstance(entity, Professional) else "Patient"
         logger.error(
-            f"Soft delete bloqué pour Professional {entity.id}: under_investigation=True",
+            f"Soft delete bloqué pour {entity_type} {entity.id}: under_investigation=True",
             extra={"investigation_notes": entity.investigation_notes},
         )
-        raise ProfessionalDeletionBlockedError(
-            professional_id=entity.id,
-            reason="under_investigation",
-            investigation_notes=entity.investigation_notes,
-        )
+
+        # Lever exception spécifique selon le type
+        if isinstance(entity, Professional):
+            raise ProfessionalDeletionBlockedError(
+                professional_id=entity.id,
+                reason="under_investigation",
+                investigation_notes=entity.investigation_notes,
+            )
+        else:  # Patient
+            raise PatientDeletionBlockedError(
+                patient_id=entity.id,
+                reason="under_investigation",
+                investigation_notes=entity.investigation_notes,
+            )
 
     # CHECK: Déjà soft deleted ou anonymisé
     if hasattr(entity, "soft_deleted_at") and entity.soft_deleted_at is not None:
@@ -1063,14 +1076,22 @@ async def _soft_delete(entity: Patient | Professional, event: KeycloakWebhookEve
         logger.warning(f"{entity.__class__.__name__} {entity.id} already anonymized")
         return
 
-    # STEP 1: Générer correlation_hash AVANT anonymisation (pour professionnels)
-    if isinstance(entity, Professional):
-        if not entity.correlation_hash:
+    # STEP 1: Générer correlation_hash AVANT anonymisation
+    if not entity.correlation_hash:
+        if isinstance(entity, Professional):
             entity.correlation_hash = _generate_correlation_hash(
                 entity.email, entity.professional_id
             )
             logger.info(
                 f"Generated correlation_hash for Professional {entity.id}",
+                extra={"correlation_hash": entity.correlation_hash},
+            )
+        elif isinstance(entity, Patient):
+            entity.correlation_hash = _generate_patient_correlation_hash(
+                entity.email, entity.national_id
+            )
+            logger.info(
+                f"Generated correlation_hash for Patient {entity.id}",
                 extra={"correlation_hash": entity.correlation_hash},
             )
 
