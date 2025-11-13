@@ -156,6 +156,56 @@ class ProfessionalDeletionBlockedError(RFC9457Exception):
         )
 
 
+class PatientDeletionBlockedError(RFC9457Exception):
+    """
+    Exception levée lorsqu'une suppression de patient est bloquée.
+
+    Cette exception est utilisée lorsqu'un patient ne peut pas être supprimé
+    car il est sous enquête (under_investigation=True) ou pour d'autres
+    raisons légales/administratives.
+
+    Attributes:
+        status_code: Code HTTP 423 (Locked)
+        problem_detail: Détails de l'erreur au format RFC 9457
+
+    Example:
+        ```python
+        if patient.under_investigation:
+            raise PatientDeletionBlockedError(
+                patient_id=patient.id,
+                reason="under_investigation",
+                investigation_notes=patient.investigation_notes
+            )
+        ```
+    """
+
+    def __init__(
+        self,
+        patient_id: int,
+        reason: str = "under_investigation",
+        investigation_notes: str | None = None,
+    ):
+        """
+        Initialise une exception de blocage de suppression avec détails RFC 9457.
+
+        Args:
+            patient_id: ID du patient concerné
+            reason: Raison du blocage (under_investigation, legal_hold, etc.)
+            investigation_notes: Notes explicatives sur le blocage
+        """
+        detail_parts = [f"Cannot delete patient {patient_id}: {reason}"]
+        if investigation_notes:
+            detail_parts.append(f"Notes: {investigation_notes}")
+
+        super().__init__(
+            status_code=423,  # Locked
+            title="Patient Deletion Blocked",
+            detail=". ".join(detail_parts),
+            type="https://africare.app/errors/deletion-blocked",
+            instance=f"/api/v1/patients/{patient_id}",
+        )
+
+
 __all__ = [
     "AfriCareException",
     "AnonymizationError",
@@ -164,6 +214,7 @@ __all__ = [
     "InternalServerError",
     "KeycloakServiceError",
     "NotFoundError",
+    "PatientDeletionBlockedError",
     "ProblemDetail",
     "ProfessionalDeletionBlockedError",
     "RFC9457Exception",
