@@ -117,12 +117,41 @@ class Patient(Base):
         nullable=False, default=False, comment="Identité vérifiée par un professionnel"
     )
 
-    # Soft delete
+    # Gestion avancée de suppression (RGPD)
+    under_investigation: Mapped[bool] = mapped_column(
+        nullable=False,
+        default=False,
+        index=True,
+        comment="Patient sous enquête (bloque suppression)",
+    )
+    investigation_notes: Mapped[str | None] = mapped_column(
+        String(1000), nullable=True, comment="Notes sur l'enquête en cours"
+    )
+    correlation_hash: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+        comment="Hash SHA-256 de email+national_id pour corrélation anonymisée",
+    )
+    soft_deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+        comment="Date de soft delete (début période de grâce 7 jours)",
+    )
+    anonymized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+        comment="Date d'anonymisation définitive (après période de grâce)",
+    )
+
+    # Soft delete (deprecated, use soft_deleted_at)
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
         index=True,
-        comment="Date de suppression (soft delete)",
+        comment="Date de suppression définitive (deprecated, use soft_deleted_at)",
     )
     deleted_by: Mapped[str | None] = mapped_column(
         String(255), nullable=True, comment="Keycloak user ID de l'utilisateur qui a supprimé"
