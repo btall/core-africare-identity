@@ -239,6 +239,38 @@ async def sync_user_registration(db: AsyncSession, event: KeycloakWebhookEvent) 
                     message=f"Professional created: {professional.id}",
                 )
 
+            # DETECT: Vérifier si patient revient après anonymisation
+            email = event.user.email if event.user else None
+            national_id = None  # TODO: Extraire de user attributes si disponible
+
+            if email:
+                returning_patient = await _check_returning_patient(db, email, national_id)
+                if returning_patient:
+                    logger.info(
+                        f"Patient revenant détecté: {returning_patient.id} "
+                        f"(correlation_hash={returning_patient.correlation_hash})"
+                    )
+                    # Publier événement de retour
+                    await publish(
+                        "identity.patient.returning_user",
+                        {
+                            "old_patient_id": returning_patient.id,
+                            "new_keycloak_user_id": event.user_id,
+                            "correlation_hash": returning_patient.correlation_hash,
+                            "old_soft_deleted_at": (
+                                returning_patient.soft_deleted_at.isoformat()
+                                if returning_patient.soft_deleted_at
+                                else None
+                            ),
+                            "old_anonymized_at": (
+                                returning_patient.anonymized_at.isoformat()
+                                if returning_patient.anonymized_at
+                                else None
+                            ),
+                            "detected_at": datetime.now(UTC).isoformat(),
+                        },
+                    )
+
             # Créer un profil Patient (par défaut)
             patient = await _create_patient_from_event(db, event)
             await db.commit()
@@ -738,6 +770,77 @@ async def _check_returning_professional(
     return result.scalar_one_or_none()
 
 
+def _generate_patient_correlation_hash(email: str, national_id: str | None = None) -> str:
+    """
+    Génère un hash de corrélation SHA-256 déterministe pour détecter retours après anonymisation.
+
+    Le hash est calculé à partir de email + national_id + salt global, permettant
+    de détecter si un patient revient après anonymisation sans stocker les données
+    personnelles en clair (conformité RGPD).
+
+    Args:
+        email: Email du patient avant anonymisation
+        national_id: Numéro d'identification nationale (CNI, passeport) - peut être None
+
+    Returns:
+        Hash SHA-256 hexadécimal (64 caractères)
+
+    Example:
+        >>> hash = _generate_patient_correlation_hash("amadou@email.sn", "CNI123456")
+        >>> len(hash)
+        64
+    """
+    import hashlib
+
+    from app.core.config import settings
+
+    # Salt global depuis configuration (ou défaut si non défini)
+    salt = getattr(settings, "CORRELATION_HASH_SALT", "africare-identity-salt-v1")
+
+    # Construire la chaîne à hasher
+    hash_input = f"{email}|{national_id or ''}|{salt}"
+
+    # Générer SHA-256
+    return hashlib.sha256(hash_input.encode("utf-8")).hexdigest()
+
+
+async def _check_returning_patient(
+    db: AsyncSession, email: str, national_id: str | None = None
+) -> Patient | None:
+    """
+    Vérifie si un patient anonymisé revient en calculant son correlation_hash.
+
+    Cette fonction permet de détecter les patients qui reviennent après suppression
+    en comparant le hash calculé avec ceux stockés dans la base.
+
+    Args:
+        db: Session de base de données async
+        email: Email du nouveau patient
+        national_id: Numéro d'identification nationale (peut être None)
+
+    Returns:
+        Patient anonymisé correspondant si trouvé, None sinon
+
+    Example:
+        ```python
+        returning = await _check_returning_patient(db, "amadou@email.sn", "CNI123456")
+        if returning:
+            logger.info(f"Patient revenant détecté: {returning.id}")
+        ```
+    """
+    # Générer le hash pour ce patient
+    correlation_hash = _generate_patient_correlation_hash(email, national_id)
+
+    # Chercher patient avec ce hash (uniquement anonymisés)
+    result = await db.execute(
+        select(Patient).where(
+            Patient.correlation_hash == correlation_hash,
+            Patient.anonymized_at.isnot(None),  # Seulement les anonymisés
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 @async_retry_with_backoff(
     max_attempts=3,
     min_wait_seconds=1,
@@ -930,27 +1033,40 @@ async def _soft_delete(entity: Patient | Professional, event: KeycloakWebhookEve
     Soft delete avec période de grâce de 7 jours.
 
     Workflow:
-    1. Vérifie si professional sous enquête (bloque si true)
+    1. Vérifie si professional/patient sous enquête (bloque si true)
     2. Génère correlation_hash AVANT anonymisation (pour détection retours)
     3. Marque comme inactif avec soft_deleted_at
     4. Anonymisation effective après 7 jours (scheduler)
 
     Raises:
         ProfessionalDeletionBlockedError: Si professional.under_investigation=True
+        PatientDeletionBlockedError: Si patient.under_investigation=True
     """
     from datetime import UTC
 
-    # CHECK: Bloquer si professionnel sous enquête
-    if isinstance(entity, Professional) and entity.under_investigation:
+    from app.core.exceptions import PatientDeletionBlockedError
+
+    # CHECK: Bloquer si entité sous enquête
+    if hasattr(entity, "under_investigation") and entity.under_investigation:
+        entity_type = "Professional" if isinstance(entity, Professional) else "Patient"
         logger.error(
-            f"Soft delete bloqué pour Professional {entity.id}: under_investigation=True",
+            f"Soft delete bloqué pour {entity_type} {entity.id}: under_investigation=True",
             extra={"investigation_notes": entity.investigation_notes},
         )
-        raise ProfessionalDeletionBlockedError(
-            professional_id=entity.id,
-            reason="under_investigation",
-            investigation_notes=entity.investigation_notes,
-        )
+
+        # Lever exception spécifique selon le type
+        if isinstance(entity, Professional):
+            raise ProfessionalDeletionBlockedError(
+                professional_id=entity.id,
+                reason="under_investigation",
+                investigation_notes=entity.investigation_notes,
+            )
+        else:  # Patient
+            raise PatientDeletionBlockedError(
+                patient_id=entity.id,
+                reason="under_investigation",
+                investigation_notes=entity.investigation_notes,
+            )
 
     # CHECK: Déjà soft deleted ou anonymisé
     if hasattr(entity, "soft_deleted_at") and entity.soft_deleted_at is not None:
@@ -960,14 +1076,22 @@ async def _soft_delete(entity: Patient | Professional, event: KeycloakWebhookEve
         logger.warning(f"{entity.__class__.__name__} {entity.id} already anonymized")
         return
 
-    # STEP 1: Générer correlation_hash AVANT anonymisation (pour professionnels)
-    if isinstance(entity, Professional):
-        if not entity.correlation_hash:
+    # STEP 1: Générer correlation_hash AVANT anonymisation
+    if not entity.correlation_hash:
+        if isinstance(entity, Professional):
             entity.correlation_hash = _generate_correlation_hash(
                 entity.email, entity.professional_id
             )
             logger.info(
                 f"Generated correlation_hash for Professional {entity.id}",
+                extra={"correlation_hash": entity.correlation_hash},
+            )
+        elif isinstance(entity, Patient):
+            entity.correlation_hash = _generate_patient_correlation_hash(
+                entity.email, entity.national_id
+            )
+            logger.info(
+                f"Generated correlation_hash for Patient {entity.id}",
                 extra={"correlation_hash": entity.correlation_hash},
             )
 

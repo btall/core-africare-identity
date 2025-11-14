@@ -210,3 +210,79 @@ class PatientListResponse(BaseModel):
     total: int = Field(..., ge=0, description="Nombre total de résultats")
     skip: int = Field(..., ge=0, description="Nombre d'éléments sautés")
     limit: int = Field(..., ge=1, description="Limite par page")
+
+
+# =============================================================================
+# Schémas pour gestion suppression/restauration
+# =============================================================================
+
+PatientDeletionReason = Literal[
+    "user_request",  # Demande du patient
+    "gdpr_compliance",  # Conformité RGPD
+    "admin_action",  # Action administrateur
+    "prolonged_inactivity",  # Inactivité prolongée (ex: 5 ans)
+    "duplicate_account",  # Compte en double
+    "deceased",  # Décès du patient
+]
+
+
+class PatientDeletionRequest(BaseModel):
+    """Requête de suppression de patient (admin uniquement)."""
+
+    deletion_reason: PatientDeletionReason = Field(
+        ...,
+        description="Raison de la suppression",
+        examples=["admin_action"],
+    )
+    investigation_check_override: bool = Field(
+        default=False,
+        description="Forcer suppression même si under_investigation=True (admin seulement)",
+    )
+    notes: str | None = Field(
+        None, max_length=1000, description="Notes administratives sur la suppression"
+    )
+
+
+class PatientRestoreRequest(BaseModel):
+    """Requête de restauration de patient en période de grâce (admin uniquement)."""
+
+    restore_reason: NonEmptyStr = Field(
+        ...,
+        description="Raison de la restauration",
+        examples=["Erreur administrative", "Patient réintégré"],
+    )
+    notes: str | None = Field(
+        None, max_length=1000, description="Notes administratives sur la restauration"
+    )
+
+
+class PatientInvestigationUpdate(BaseModel):
+    """Requête de mise à jour du statut d'enquête (admin uniquement)."""
+
+    under_investigation: bool = Field(..., description="Patient sous enquête")
+    investigation_notes: str | None = Field(
+        None, max_length=1000, description="Notes sur l'enquête en cours"
+    )
+
+
+class PatientDeletionContext(BaseModel):
+    """Contexte de suppression pour endpoints administrateur."""
+
+    reason: str | None = Field(
+        None, max_length=1000, description="Raison ou notes sur l'action administrative"
+    )
+
+
+class PatientAnonymizationStatus(BaseModel):
+    """Statut d'anonymisation pour un patient soft deleted."""
+
+    patient_id: PatientId = Field(..., description="ID du patient")
+    keycloak_user_id: str = Field(..., description="Keycloak user ID")
+    email: str | None = Field(None, description="Email (potentiellement anonymisé)")
+    soft_deleted_at: datetime | None = Field(None, description="Date de soft delete")
+    anonymized_at: datetime | None = Field(None, description="Date d'anonymisation")
+    deletion_reason: PatientDeletionReason | None = Field(
+        None, description="Raison de la suppression"
+    )
+
+    model_config = {"from_attributes": True}
