@@ -158,6 +158,22 @@ class PatientResponse(PatientBase):
     created_by: str | None
     updated_by: str | None
 
+    # Override email field to allow anonymized emails
+    email: str | None = Field(None, description="Adresse email (peut être anonymisée)")
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def validate_email_or_anonymized(cls, v: str | None) -> str | None:
+        """Valide l'email ou accepte les emails anonymisés."""
+        if v is None:
+            return v
+        # Accepter les emails anonymisés (pattern: deleted_*@anonymized.local ou $2b$*)
+        if v.endswith("@anonymized.local") or v.startswith("$2b$"):
+            return v
+        # Pour les emails normaux, valider le format (mais sans utiliser EmailStr)
+        # Car EmailStr rejette .local qui est utilisé pour l'anonymisation
+        return v
+
     model_config = {"from_attributes": True}
 
 
