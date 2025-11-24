@@ -15,12 +15,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
 from app.core.events import publish
+from app.core.exceptions import PatientDeletionBlockedError
 from app.models.patient import Patient
 from app.schemas.patient import (
     PatientAnonymizationStatus,
     PatientDeletionContext,
+    PatientDeletionRequest,
     PatientResponse,
     PatientRestoreRequest,
+)
+from app.services.keycloak_sync_service import (
+    _generate_patient_correlation_hash,
+    _soft_delete,
 )
 
 logger = logging.getLogger(__name__)
@@ -131,6 +137,84 @@ async def remove_investigation_status(
     logger.info(f"Patient {patient_id} enquête retirée")
 
     return PatientResponse.model_validate(patient)
+
+
+@router.delete("/{patient_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_patient_admin(
+    patient_id: int,
+    deletion_request: PatientDeletionRequest,
+    db: AsyncSession = Depends(get_session),
+) -> None:
+    """
+    Supprime un patient avec le système RGPD (soft delete + période de grâce 7 jours).
+
+    Cette méthode déclenche:
+    1. Soft delete avec remplissage de soft_deleted_at
+    2. Génération du correlation_hash pour détection retour utilisateur
+    3. Démarrage période de grâce de 7 jours
+    4. Publication événement identity.patient.soft_deleted
+    5. Anonymisation automatique après 7 jours (via scheduler)
+
+    Args:
+        patient_id: ID du patient à supprimer
+        deletion_request: Raison et paramètres de suppression
+        db: Session de base de données
+
+    Returns:
+        None (204 No Content)
+
+    Raises:
+        HTTPException 404: Patient non trouvé
+        HTTPException 423: Patient sous enquête (deletion_request.investigation_check_override=False)
+    """
+    # Récupérer patient
+    patient = await db.get(Patient, patient_id)
+    if not patient:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Patient {patient_id} not found",
+        )
+
+    # Vérifier si déjà soft deleted
+    if patient.soft_deleted_at:
+        logger.warning(f"Patient {patient_id} déjà soft deleted")
+        return  # Idempotent
+
+    try:
+        # Générer correlation_hash AVANT soft delete
+        if not patient.correlation_hash and patient.email:
+            patient.correlation_hash = _generate_patient_correlation_hash(
+                email=patient.email,
+                national_id=patient.national_id,
+            )
+
+        # Stocker deletion_reason
+        patient.deletion_reason = deletion_request.deletion_reason
+
+        # Créer un événement fictif pour _soft_delete (utilise même interface que webhook)
+        class MockEvent:
+            def __init__(self, reason, override):
+                self.user_id = patient.keycloak_user_id
+                self.deletion_reason = reason
+                self.investigation_check_override = override
+
+        mock_event = MockEvent(
+            deletion_request.deletion_reason,
+            deletion_request.investigation_check_override,
+        )
+
+        # Appeler _soft_delete (gère under_investigation check, soft_deleted_at, événement)
+        await _soft_delete(patient, mock_event)
+
+        await db.commit()
+
+        logger.info(
+            f"Patient {patient_id} soft deleted (raison: {deletion_request.deletion_reason})"
+        )
+
+    except PatientDeletionBlockedError:
+        # Re-raise l'exception RFC 9457 telle quelle
+        raise
 
 
 @router.post("/{patient_id}/restore", response_model=PatientResponse)
