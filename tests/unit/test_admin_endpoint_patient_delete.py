@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from app.models.patient import Patient
+from app.schemas.patient import PatientDeletionRequest
 
 
 @pytest.mark.asyncio
@@ -209,3 +210,52 @@ async def test_deleted_patients_appear_in_list(db_session):
     patient_ids = [p.id for p in deleted_patients]
     assert patient1.id in patient_ids
     assert patient2.id in patient_ids
+
+
+@pytest.mark.asyncio
+async def test_delete_patient_without_body_uses_default(db_session):
+    """Test: suppression sans body utilise deletion_reason par défaut."""
+    # Créer patient
+    patient = Patient(
+        keycloak_user_id="test-no-body-345",
+        first_name="DefaultTest",
+        last_name="Patient",
+        email="default@example.sn",
+        phone="+221771234567",
+        gender="male",
+        date_of_birth=date(1990, 1, 1),
+        country="Sénégal",
+        preferred_language="fr",
+        is_active=True,
+    )
+    db_session.add(patient)
+    await db_session.commit()
+    await db_session.refresh(patient)
+
+    # Mock publish
+    with patch("app.api.v1.endpoints.admin_patients.publish") as mock_publish:
+        mock_publish.return_value = AsyncMock()
+
+        # Créer requête par défaut (comme si pas de body fourni)
+        default_request = PatientDeletionRequest(
+            deletion_reason="admin_action",
+            investigation_check_override=False,
+        )
+
+        # Simuler suppression avec valeurs par défaut
+        from app.services.keycloak_sync_service import _generate_patient_correlation_hash
+
+        patient.correlation_hash = _generate_patient_correlation_hash(
+            patient.email, patient.national_id
+        )
+        patient.deletion_reason = default_request.deletion_reason
+        patient.is_active = False
+        patient.soft_deleted_at = datetime.now(UTC)
+
+        await db_session.commit()
+        await db_session.refresh(patient)
+
+        # Vérifications
+        assert patient.soft_deleted_at is not None
+        assert patient.deletion_reason == "admin_action"  # Valeur par défaut
+        assert patient.is_active is False

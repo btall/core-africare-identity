@@ -9,7 +9,7 @@ Ce module fournit des endpoints réservés aux administrateurs pour:
 import logging
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -142,11 +142,21 @@ async def remove_investigation_status(
 @router.delete("/{patient_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_patient_admin(
     patient_id: int,
-    deletion_request: PatientDeletionRequest,
     db: AsyncSession = Depends(get_session),
+    deletion_request: PatientDeletionRequest = Body(
+        default=PatientDeletionRequest(
+            deletion_reason="admin_action",
+            investigation_check_override=False,
+        ),
+        description="Paramètres de suppression (optionnel, défaut: admin_action)",
+    ),
 ) -> None:
     """
     Supprime un patient avec le système RGPD (soft delete + période de grâce 7 jours).
+
+    Body JSON optionnel :
+    - Si omis : utilise deletion_reason="admin_action" par défaut
+    - Si fourni : utilise deletion_reason, investigation_check_override, notes
 
     Cette méthode déclenche:
     1. Soft delete avec remplissage de soft_deleted_at
@@ -157,15 +167,22 @@ async def delete_patient_admin(
 
     Args:
         patient_id: ID du patient à supprimer
-        deletion_request: Raison et paramètres de suppression
         db: Session de base de données
+        deletion_request: Paramètres de suppression (optionnel, défaut admin_action)
 
     Returns:
         None (204 No Content)
 
     Raises:
         HTTPException 404: Patient non trouvé
-        HTTPException 423: Patient sous enquête (deletion_request.investigation_check_override=False)
+        HTTPException 423: Patient sous enquête (si investigation_check_override=False)
+
+    Examples:
+        DELETE /api/v1/admin/patients/123
+        (sans body, utilise deletion_reason="admin_action")
+
+        DELETE /api/v1/admin/patients/123
+        Body: {"deletion_reason": "user_request", "notes": "Demande du patient"}
     """
     # Récupérer patient
     patient = await db.get(Patient, patient_id)
