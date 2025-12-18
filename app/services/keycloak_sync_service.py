@@ -1,7 +1,19 @@
-"""Service de synchronisation des événements Keycloak vers PostgreSQL.
+"""Service de synchronisation des événements Keycloak vers HAPI FHIR + PostgreSQL.
 
 Ce module implémente la logique de synchronisation temps-réel
-entre les événements Keycloak et la base de données locale.
+entre les événements Keycloak et l'architecture hybride FHIR/PostgreSQL.
+
+Architecture:
+    Keycloak Webhook -> Redis Streams -> keycloak_sync_service
+                                              |
+                                              v
+                              patient_service / professional_service
+                                              |
+                              +---------------+---------------+
+                              |                               |
+                              v                               v
+                         HAPI FHIR                    PostgreSQL
+                    (donnees demographiques)      (metadonnees GDPR)
 """
 
 import logging
@@ -23,9 +35,16 @@ from app.core.exceptions import (
     ProfessionalDeletionBlockedError,
 )
 from app.core.retry import async_retry_with_backoff
+from app.models.gdpr_metadata import PatientGdprMetadata, ProfessionalGdprMetadata
+
+# Legacy imports pour les fonctions admin/scheduler qui utilisent encore les anciens modèles
+# TODO: Migrer admin_patients.py et schedulers vers les services FHIR
 from app.models.patient import Patient
 from app.models.professional import Professional
 from app.schemas.keycloak import KeycloakWebhookEvent, SyncResult
+from app.schemas.patient import PatientCreate, PatientUpdate
+from app.schemas.professional import ProfessionalCreate, ProfessionalUpdate
+from app.services import patient_service, professional_service
 
 logger = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
@@ -109,8 +128,9 @@ async def sync_user_registration(db: AsyncSession, event: KeycloakWebhookEvent) 
     """
     Synchronise un événement REGISTER (création d'utilisateur).
 
-    Crée automatiquement un profil Patient ou Professional dans PostgreSQL
-    basé sur les attributs Keycloak.
+    Crée automatiquement un profil Patient ou Professional via les services FHIR:
+    - Données démographiques dans HAPI FHIR
+    - Métadonnées GDPR dans PostgreSQL
 
     Args:
         db: Session de base de données async
@@ -135,12 +155,16 @@ async def sync_user_registration(db: AsyncSession, event: KeycloakWebhookEvent) 
                     message="User object missing in event",
                 )
 
-            # Vérifier si l'utilisateur existe déjà (dans Patient OU Professional)
+            # Vérifier si l'utilisateur existe déjà (dans PatientGdprMetadata OU ProfessionalGdprMetadata)
             existing_patient = await db.execute(
-                select(Patient).where(Patient.keycloak_user_id == event.user_id)
+                select(PatientGdprMetadata).where(
+                    PatientGdprMetadata.keycloak_user_id == event.user_id
+                )
             )
             existing_professional = await db.execute(
-                select(Professional).where(Professional.keycloak_user_id == event.user_id)
+                select(ProfessionalGdprMetadata).where(
+                    ProfessionalGdprMetadata.keycloak_user_id == event.user_id
+                )
             )
 
             if existing_patient.scalar_one_or_none() or existing_professional.scalar_one_or_none():
@@ -175,11 +199,11 @@ async def sync_user_registration(db: AsyncSession, event: KeycloakWebhookEvent) 
             if is_provider:
                 # DETECT: Vérifier si professionnel revient après anonymisation
                 email = event.user.email if event.user else None
-                professional_id = None  # TODO: Extraire de user attributes si disponible
+                professional_id_str = None  # TODO: Extraire de user attributes si disponible
 
                 if email:
                     returning_professional = await _check_returning_professional(
-                        db, email, professional_id
+                        db, email, professional_id_str
                     )
                     if returning_professional:
                         logger.info(
@@ -207,27 +231,14 @@ async def sync_user_registration(db: AsyncSession, event: KeycloakWebhookEvent) 
                             },
                         )
 
-                # Créer un profil Professional
-                professional = await _create_professional_from_event(db, event)
-                await db.commit()
-                await db.refresh(professional)
+                # Créer un profil Professional via le service FHIR
+                # (commit + publication événement inclus dans le service)
+                professional_id = await _create_professional_from_event(db, event)
 
-                # Publier événement de création
-                await publish(
-                    "identity.professional.created",
-                    {
-                        "professional_id": professional.id,
-                        "keycloak_user_id": event.user_id,
-                        "email": professional.email,
-                        "client_id": event.client_id,
-                        "created_at": datetime.now().isoformat(),
-                    },
-                )
-
-                span.set_attribute("professional.id", professional.id)
+                span.set_attribute("professional.id", professional_id)
                 span.set_attribute("client.id", event.client_id or "unknown")
                 logger.info(
-                    f"Professional créé depuis Keycloak: professional_id={professional.id}, "
+                    f"Professional créé depuis Keycloak via FHIR: professional_id={professional_id}, "
                     f"client_id={event.client_id}"
                 )
 
@@ -235,8 +246,8 @@ async def sync_user_registration(db: AsyncSession, event: KeycloakWebhookEvent) 
                     success=True,
                     event_type=event.event_type,
                     user_id=event.user_id,
-                    patient_id=professional.id,  # Utilise patient_id pour compatibilité avec le schema
-                    message=f"Professional created: {professional.id}",
+                    patient_id=professional_id,  # Utilise patient_id pour compatibilité avec le schema
+                    message=f"Professional created: {professional_id}",
                 )
 
             # DETECT: Vérifier si patient revient après anonymisation
@@ -271,35 +282,23 @@ async def sync_user_registration(db: AsyncSession, event: KeycloakWebhookEvent) 
                         },
                     )
 
-            # Créer un profil Patient (par défaut)
-            patient = await _create_patient_from_event(db, event)
-            await db.commit()
-            await db.refresh(patient)
+            # Créer un profil Patient via le service FHIR
+            # (commit + publication événement inclus dans le service)
+            patient_id = await _create_patient_from_event(db, event)
 
-            # Publier événement de création
-            await publish(
-                "identity.patient.created",
-                {
-                    "patient_id": patient.id,
-                    "keycloak_user_id": event.user_id,
-                    "email": patient.email,
-                    "client_id": event.client_id,
-                    "created_at": datetime.now().isoformat(),
-                },
-            )
-
-            span.set_attribute("patient.id", patient.id)
+            span.set_attribute("patient.id", patient_id)
             span.set_attribute("client.id", event.client_id or "unknown")
             logger.info(
-                f"Patient créé depuis Keycloak: patient_id={patient.id}, client_id={event.client_id}"
+                f"Patient créé depuis Keycloak via FHIR: patient_id={patient_id}, "
+                f"client_id={event.client_id}"
             )
 
             return SyncResult(
                 success=True,
                 event_type=event.event_type,
                 user_id=event.user_id,
-                patient_id=patient.id,
-                message=f"Patient created: {patient.id}",
+                patient_id=patient_id,
+                message=f"Patient created: {patient_id}",
             )
 
         except Exception as e:
@@ -318,9 +317,9 @@ async def sync_user_registration(db: AsyncSession, event: KeycloakWebhookEvent) 
 )
 async def sync_profile_update(db: AsyncSession, event: KeycloakWebhookEvent) -> SyncResult:
     """
-    Synchronise un événement UPDATE_PROFILE.
+    Synchronise un événement UPDATE_PROFILE via les services FHIR.
 
-    Met à jour le profil Patient/Professional avec les nouvelles données.
+    Met à jour le profil Patient/Professional dans HAPI FHIR + PostgreSQL.
 
     Args:
         db: Session de base de données async
@@ -347,22 +346,26 @@ async def sync_profile_update(db: AsyncSession, event: KeycloakWebhookEvent) -> 
                     message="User object missing in event",
                 )
 
-            # Chercher d'abord dans Patient
+            # Chercher d'abord dans PatientGdprMetadata
             result = await db.execute(
-                select(Patient).where(Patient.keycloak_user_id == event.user_id)
-            )
-            patient = result.scalar_one_or_none()
-
-            # Si pas trouvé dans Patient, chercher dans Professional
-            professional = None
-            if not patient:
-                result = await db.execute(
-                    select(Professional).where(Professional.keycloak_user_id == event.user_id)
+                select(PatientGdprMetadata).where(
+                    PatientGdprMetadata.keycloak_user_id == event.user_id
                 )
-                professional = result.scalar_one_or_none()
+            )
+            patient_gdpr = result.scalar_one_or_none()
+
+            # Si pas trouvé dans Patient, chercher dans ProfessionalGdprMetadata
+            professional_gdpr = None
+            if not patient_gdpr:
+                result = await db.execute(
+                    select(ProfessionalGdprMetadata).where(
+                        ProfessionalGdprMetadata.keycloak_user_id == event.user_id
+                    )
+                )
+                professional_gdpr = result.scalar_one_or_none()
 
             # Si ni Patient ni Professional trouvé, retourner erreur
-            if not patient and not professional:
+            if not patient_gdpr and not professional_gdpr:
                 logger.warning(
                     f"Aucun Patient ou Professional trouvé pour user_id: {event.user_id}"
                 )
@@ -374,56 +377,104 @@ async def sync_profile_update(db: AsyncSession, event: KeycloakWebhookEvent) -> 
                     message="Patient or Professional not found",
                 )
 
-            # Déterminer le profil à mettre à jour
-            profile = patient if patient else professional
-            profile_type = "patient" if patient else "professional"
-
-            # Mettre à jour les champs
+            # Construire les données de mise à jour
             updated_fields = []
-            if event.user.first_name and event.user.first_name != profile.first_name:
-                profile.first_name = event.user.first_name
+            update_data = {}
+
+            if event.user.first_name:
+                update_data["first_name"] = event.user.first_name
                 updated_fields.append("first_name")
 
-            if event.user.last_name and event.user.last_name != profile.last_name:
-                profile.last_name = event.user.last_name
+            if event.user.last_name:
+                update_data["last_name"] = event.user.last_name
                 updated_fields.append("last_name")
 
-            if event.user.phone and event.user.phone != profile.phone:
-                profile.phone = event.user.phone
+            if event.user.phone:
+                update_data["phone"] = event.user.phone
                 updated_fields.append("phone")
 
-            if updated_fields:
-                profile.updated_at = datetime.now()
-                await db.commit()
-                await db.refresh(profile)
+            if not update_data:
+                # Aucun champ à mettre à jour
+                profile_id = patient_gdpr.id if patient_gdpr else professional_gdpr.id
+                profile_type = "patient" if patient_gdpr else "professional"
+                span.set_attribute(f"{profile_type}.id", profile_id)
+                span.set_attribute("updated_fields", "[]")
 
-                # Publier événement de mise à jour selon le type
-                event_subject = f"identity.{profile_type}.updated"
-                await publish(
-                    event_subject,
-                    {
-                        f"{profile_type}_id": profile.id,
-                        "keycloak_user_id": event.user_id,
-                        "updated_fields": updated_fields,
-                        "updated_at": datetime.now().isoformat(),
-                    },
+                return SyncResult(
+                    success=True,
+                    event_type=event.event_type,
+                    user_id=event.user_id,
+                    patient_id=profile_id,
+                    message="No changes",
                 )
 
+            if patient_gdpr:
+                # Mettre à jour Patient via le service FHIR
+                patient_update = PatientUpdate(**update_data)
+                updated_response = await patient_service.update_patient(
+                    db=db,
+                    patient_id=patient_gdpr.id,
+                    patient_update=patient_update,
+                    current_user_id=event.user_id,
+                )
+
+                if not updated_response:
+                    return SyncResult(
+                        success=False,
+                        event_type=event.event_type,
+                        user_id=event.user_id,
+                        patient_id=patient_gdpr.id,
+                        message="Patient update failed",
+                    )
+
+                span.set_attribute("patient.id", patient_gdpr.id)
+                span.set_attribute("updated_fields", str(updated_fields))
                 logger.info(
-                    f"{profile_type.capitalize()} mis à jour: {profile_type}_id={profile.id}, "
+                    f"Patient mis à jour via FHIR: patient_id={patient_gdpr.id}, "
                     f"fields={updated_fields}"
                 )
 
-            span.set_attribute(f"{profile_type}.id", profile.id)
-            span.set_attribute("updated_fields", str(updated_fields))
+                return SyncResult(
+                    success=True,
+                    event_type=event.event_type,
+                    user_id=event.user_id,
+                    patient_id=patient_gdpr.id,
+                    message=f"Updated fields: {updated_fields}",
+                )
 
-            return SyncResult(
-                success=True,
-                event_type=event.event_type,
-                user_id=event.user_id,
-                patient_id=profile.id,
-                message=f"Updated fields: {updated_fields}" if updated_fields else "No changes",
-            )
+            else:
+                # Mettre à jour Professional via le service FHIR
+                professional_update = ProfessionalUpdate(**update_data)
+                updated_response = await professional_service.update_professional(
+                    db=db,
+                    professional_id=professional_gdpr.id,
+                    professional_update=professional_update,
+                    current_user_id=event.user_id,
+                )
+
+                if not updated_response:
+                    return SyncResult(
+                        success=False,
+                        event_type=event.event_type,
+                        user_id=event.user_id,
+                        patient_id=professional_gdpr.id,
+                        message="Professional update failed",
+                    )
+
+                span.set_attribute("professional.id", professional_gdpr.id)
+                span.set_attribute("updated_fields", str(updated_fields))
+                logger.info(
+                    f"Professional mis à jour via FHIR: professional_id={professional_gdpr.id}, "
+                    f"fields={updated_fields}"
+                )
+
+                return SyncResult(
+                    success=True,
+                    event_type=event.event_type,
+                    user_id=event.user_id,
+                    patient_id=professional_gdpr.id,
+                    message=f"Updated fields: {updated_fields}",
+                )
 
         except Exception as e:
             span.record_exception(e)
@@ -441,9 +492,9 @@ async def sync_profile_update(db: AsyncSession, event: KeycloakWebhookEvent) -> 
 )
 async def sync_email_update(db: AsyncSession, event: KeycloakWebhookEvent) -> SyncResult:
     """
-    Synchronise un événement UPDATE_EMAIL.
+    Synchronise un événement UPDATE_EMAIL via les services FHIR.
 
-    Met à jour l'adresse email du Patient/Professional.
+    Met à jour l'adresse email du Patient/Professional dans HAPI FHIR + PostgreSQL.
 
     Args:
         db: Session de base de données async
@@ -470,22 +521,6 @@ async def sync_email_update(db: AsyncSession, event: KeycloakWebhookEvent) -> Sy
                     message="User object missing in event",
                 )
 
-            # Chercher le patient
-            result = await db.execute(
-                select(Patient).where(Patient.keycloak_user_id == event.user_id)
-            )
-            patient = result.scalar_one_or_none()
-
-            if not patient:
-                logger.warning(f"Patient non trouvé pour user_id: {event.user_id}")
-                return SyncResult(
-                    success=False,
-                    event_type=event.event_type,
-                    user_id=event.user_id,
-                    patient_id=None,
-                    message="Patient not found",
-                )
-
             new_email = event.user.email
             if not new_email:
                 logger.warning("Email manquant dans l'événement UPDATE_EMAIL")
@@ -493,46 +528,120 @@ async def sync_email_update(db: AsyncSession, event: KeycloakWebhookEvent) -> Sy
                     success=False,
                     event_type=event.event_type,
                     user_id=event.user_id,
-                    patient_id=patient.id,
+                    patient_id=None,
                     message="Email missing in event",
                 )
 
-            old_email = patient.email
-            patient.email = new_email
-            patient.is_verified = event.user.email_verified or False
-            patient.updated_at = datetime.now()
-
-            await db.commit()
-            await db.refresh(patient)
-
-            # Publier événement de mise à jour email
-            await publish(
-                "identity.patient.email_updated",
-                {
-                    "patient_id": patient.id,
-                    "keycloak_user_id": event.user_id,
-                    "old_email": old_email,
-                    "new_email": new_email,
-                    "email_verified": patient.is_verified,
-                    "updated_at": datetime.now().isoformat(),
-                },
+            # Chercher d'abord dans PatientGdprMetadata
+            result = await db.execute(
+                select(PatientGdprMetadata).where(
+                    PatientGdprMetadata.keycloak_user_id == event.user_id
+                )
             )
+            patient_gdpr = result.scalar_one_or_none()
 
-            span.set_attribute("patient.id", patient.id)
-            span.set_attribute("email.old", old_email or "none")
-            span.set_attribute("email.new", new_email)
+            # Si pas trouvé dans Patient, chercher dans ProfessionalGdprMetadata
+            professional_gdpr = None
+            if not patient_gdpr:
+                result = await db.execute(
+                    select(ProfessionalGdprMetadata).where(
+                        ProfessionalGdprMetadata.keycloak_user_id == event.user_id
+                    )
+                )
+                professional_gdpr = result.scalar_one_or_none()
 
-            logger.info(
-                f"Email mis à jour: patient_id={patient.id}, old={old_email}, new={new_email}"
-            )
+            # Si ni Patient ni Professional trouvé, retourner erreur
+            if not patient_gdpr and not professional_gdpr:
+                logger.warning(
+                    f"Aucun Patient ou Professional trouvé pour user_id: {event.user_id}"
+                )
+                return SyncResult(
+                    success=False,
+                    event_type=event.event_type,
+                    user_id=event.user_id,
+                    patient_id=None,
+                    message="Patient or Professional not found",
+                )
 
-            return SyncResult(
-                success=True,
-                event_type=event.event_type,
-                user_id=event.user_id,
-                patient_id=patient.id,
-                message=f"Email updated: {old_email} -> {new_email}",
-            )
+            if patient_gdpr:
+                # Mettre à jour l'email via le service FHIR + is_verified localement
+                patient_update = PatientUpdate(email=new_email)
+                updated_response = await patient_service.update_patient(
+                    db=db,
+                    patient_id=patient_gdpr.id,
+                    patient_update=patient_update,
+                    current_user_id=event.user_id,
+                )
+
+                if not updated_response:
+                    return SyncResult(
+                        success=False,
+                        event_type=event.event_type,
+                        user_id=event.user_id,
+                        patient_id=patient_gdpr.id,
+                        message="Patient email update failed",
+                    )
+
+                # Mettre à jour is_verified localement (champ GDPR)
+                patient_gdpr.is_verified = event.user.email_verified or False
+                patient_gdpr.updated_at = datetime.now(UTC)
+                patient_gdpr.updated_by = event.user_id
+                await db.commit()
+
+                span.set_attribute("patient.id", patient_gdpr.id)
+                span.set_attribute("email.new", new_email)
+                logger.info(
+                    f"Email Patient mis à jour via FHIR: patient_id={patient_gdpr.id}, "
+                    f"email={new_email}, verified={patient_gdpr.is_verified}"
+                )
+
+                return SyncResult(
+                    success=True,
+                    event_type=event.event_type,
+                    user_id=event.user_id,
+                    patient_id=patient_gdpr.id,
+                    message=f"Email updated: {new_email}",
+                )
+
+            else:
+                # Mettre à jour l'email via le service FHIR + is_verified localement
+                professional_update = ProfessionalUpdate(email=new_email)
+                updated_response = await professional_service.update_professional(
+                    db=db,
+                    professional_id=professional_gdpr.id,
+                    professional_update=professional_update,
+                    current_user_id=event.user_id,
+                )
+
+                if not updated_response:
+                    return SyncResult(
+                        success=False,
+                        event_type=event.event_type,
+                        user_id=event.user_id,
+                        patient_id=professional_gdpr.id,
+                        message="Professional email update failed",
+                    )
+
+                # Mettre à jour is_verified localement (champ GDPR)
+                professional_gdpr.is_verified = event.user.email_verified or False
+                professional_gdpr.updated_at = datetime.now(UTC)
+                professional_gdpr.updated_by = event.user_id
+                await db.commit()
+
+                span.set_attribute("professional.id", professional_gdpr.id)
+                span.set_attribute("email.new", new_email)
+                logger.info(
+                    f"Email Professional mis à jour via FHIR: professional_id={professional_gdpr.id}, "
+                    f"email={new_email}, verified={professional_gdpr.is_verified}"
+                )
+
+                return SyncResult(
+                    success=True,
+                    event_type=event.event_type,
+                    user_id=event.user_id,
+                    patient_id=professional_gdpr.id,
+                    message=f"Email updated: {new_email}",
+                )
 
         except Exception as e:
             span.record_exception(e)
@@ -592,19 +701,25 @@ async def track_user_login(db: AsyncSession, event: KeycloakWebhookEvent) -> Syn
             raise
 
 
-async def _create_patient_from_event(db: AsyncSession, event: KeycloakWebhookEvent) -> Patient:
+async def _create_patient_from_event(db: AsyncSession, event: KeycloakWebhookEvent) -> int:
     """
-    Crée un Patient depuis un événement Keycloak.
+    Crée un Patient via le service FHIR depuis un événement Keycloak.
+
+    Cette fonction utilise patient_service.create_patient() qui:
+    1. Crée la ressource Patient dans HAPI FHIR
+    2. Crée les métadonnées GDPR dans PostgreSQL
+    3. Publie l'événement identity.patient.created
 
     Args:
         db: Session de base de données async
         event: Événement webhook Keycloak
 
     Returns:
-        Patient créé
+        ID numérique du patient créé
 
     Raises:
         ValueError: Si données requises manquantes
+        FHIROperationError: Si création FHIR échoue
     """
     if not event.user:
         raise ValueError("Objet user manquant dans l'événement")
@@ -621,8 +736,8 @@ async def _create_patient_from_event(db: AsyncSession, event: KeycloakWebhookEve
     if not user.gender:
         raise ValueError("gender est requis")
 
-    # Créer le patient
-    patient = Patient(
+    # Construire le schéma PatientCreate
+    patient_data = PatientCreate(
         keycloak_user_id=event.user_id,
         first_name=user.first_name,
         last_name=user.last_name,
@@ -635,29 +750,37 @@ async def _create_patient_from_event(db: AsyncSession, event: KeycloakWebhookEve
         region=user.region,
         city=user.city,
         preferred_language=user.preferred_language or "fr",
-        is_active=True,
-        is_verified=user.email_verified or False,
     )
 
-    db.add(patient)
-    return patient
+    # Créer via le service FHIR (commit + publication événement inclus)
+    patient_response = await patient_service.create_patient(
+        db=db,
+        patient_data=patient_data,
+        current_user_id=event.user_id,  # L'utilisateur se crée lui-même
+    )
+
+    return patient_response.id
 
 
-async def _create_professional_from_event(
-    db: AsyncSession, event: KeycloakWebhookEvent
-) -> Professional:
+async def _create_professional_from_event(db: AsyncSession, event: KeycloakWebhookEvent) -> int:
     """
-    Crée un Professional depuis un événement Keycloak.
+    Crée un Professional via le service FHIR depuis un événement Keycloak.
+
+    Cette fonction utilise professional_service.create_professional() qui:
+    1. Crée la ressource Practitioner dans HAPI FHIR
+    2. Crée les métadonnées GDPR dans PostgreSQL
+    3. Publie l'événement identity.professional.created
 
     Args:
         db: Session de base de données async
         event: Événement webhook Keycloak
 
     Returns:
-        Professional créé
+        ID numérique du professionnel créé
 
     Raises:
         ValueError: Si données requises manquantes
+        FHIROperationError: Si création FHIR échoue
     """
     if not event.user:
         raise ValueError("Objet user manquant dans l'événement")
@@ -671,27 +794,29 @@ async def _create_professional_from_event(
     if not user.email:
         raise ValueError("email est requis pour un professionnel")
 
-    # Créer le professionnel avec des valeurs par défaut (à compléter par l'utilisateur)
-    professional = Professional(
+    # Construire le schéma ProfessionalCreate avec valeurs par défaut
+    # Note: Le profil devra être complété lors de l'onboarding
+    professional_data = ProfessionalCreate(
         keycloak_user_id=event.user_id,
         first_name=user.first_name,
         last_name=user.last_name,
-        title="Dr",  # Valeur par défaut, à compléter
+        title="Dr",  # Valeur par défaut, à compléter lors de l'onboarding
         specialty="Non spécifié",  # À compléter lors de l'onboarding
         professional_type="other",  # À compléter lors de l'onboarding
         email=user.email,
         phone=user.phone or "+221000000000",  # Valeur par défaut si non fourni
-        phone_secondary=None,
-        facility_name=None,
-        qualifications=None,
         languages_spoken=user.preferred_language or "fr",
-        is_active=False,  # Le profil doit être complété et validé par un admin
-        is_verified=False,
         is_available=False,  # Pas disponible tant que le profil n'est pas complet
     )
 
-    db.add(professional)
-    return professional
+    # Créer via le service FHIR (commit + publication événement inclus)
+    professional_response = await professional_service.create_professional(
+        db=db,
+        professional_data=professional_data,
+        current_user_id=event.user_id,  # L'utilisateur se crée lui-même
+    )
+
+    return professional_response.id
 
 
 ################################################################################
@@ -735,12 +860,12 @@ def _generate_correlation_hash(email: str, professional_id: str | None) -> str:
 
 async def _check_returning_professional(
     db: AsyncSession, email: str, professional_id: str | None
-) -> Professional | None:
+) -> ProfessionalGdprMetadata | None:
     """
     Vérifie si un professionnel anonymisé revient en calculant son correlation_hash.
 
     Cette fonction permet de détecter les professionnels qui reviennent après suppression
-    en comparant le hash calculé avec ceux stockés dans la base.
+    en comparant le hash calculé avec ceux stockés dans les métadonnées GDPR.
 
     Args:
         db: Session de base de données async
@@ -748,7 +873,7 @@ async def _check_returning_professional(
         professional_id: Numéro d'ordre professionnel (peut être None)
 
     Returns:
-        Professionnel anonymisé correspondant si trouvé, None sinon
+        Métadonnées GDPR du professionnel anonymisé correspondant si trouvé, None sinon
 
     Example:
         ```python
@@ -760,11 +885,11 @@ async def _check_returning_professional(
     # Générer le hash pour ce professionnel
     correlation_hash = _generate_correlation_hash(email, professional_id)
 
-    # Chercher professionnel avec ce hash (uniquement anonymisés)
+    # Chercher dans les métadonnées GDPR (uniquement anonymisés)
     result = await db.execute(
-        select(Professional).where(
-            Professional.correlation_hash == correlation_hash,
-            Professional.anonymized_at.isnot(None),  # Seulement les anonymisés
+        select(ProfessionalGdprMetadata).where(
+            ProfessionalGdprMetadata.correlation_hash == correlation_hash,
+            ProfessionalGdprMetadata.anonymized_at.isnot(None),  # Seulement les anonymisés
         )
     )
     return result.scalar_one_or_none()
@@ -806,12 +931,12 @@ def _generate_patient_correlation_hash(email: str, national_id: str | None = Non
 
 async def _check_returning_patient(
     db: AsyncSession, email: str, national_id: str | None = None
-) -> Patient | None:
+) -> PatientGdprMetadata | None:
     """
     Vérifie si un patient anonymisé revient en calculant son correlation_hash.
 
     Cette fonction permet de détecter les patients qui reviennent après suppression
-    en comparant le hash calculé avec ceux stockés dans la base.
+    en comparant le hash calculé avec ceux stockés dans les métadonnées GDPR.
 
     Args:
         db: Session de base de données async
@@ -819,7 +944,7 @@ async def _check_returning_patient(
         national_id: Numéro d'identification nationale (peut être None)
 
     Returns:
-        Patient anonymisé correspondant si trouvé, None sinon
+        Métadonnées GDPR du patient anonymisé correspondant si trouvé, None sinon
 
     Example:
         ```python
@@ -831,11 +956,11 @@ async def _check_returning_patient(
     # Générer le hash pour ce patient
     correlation_hash = _generate_patient_correlation_hash(email, national_id)
 
-    # Chercher patient avec ce hash (uniquement anonymisés)
+    # Chercher dans les métadonnées GDPR (uniquement anonymisés)
     result = await db.execute(
-        select(Patient).where(
-            Patient.correlation_hash == correlation_hash,
-            Patient.anonymized_at.isnot(None),  # Seulement les anonymisés
+        select(PatientGdprMetadata).where(
+            PatientGdprMetadata.correlation_hash == correlation_hash,
+            PatientGdprMetadata.anonymized_at.isnot(None),  # Seulement les anonymisés
         )
     )
     return result.scalar_one_or_none()
@@ -848,24 +973,22 @@ async def _check_returning_patient(
     exceptions=TRANSIENT_DB_EXCEPTIONS,
 )
 async def sync_user_deletion(
-    db: AsyncSession, event: KeycloakWebhookEvent, strategy: DeletionStrategy = "anonymize"
+    db: AsyncSession, event: KeycloakWebhookEvent, strategy: DeletionStrategy = "soft_delete"
 ) -> SyncResult:
     """
-    Synchronise un événement DELETE (suppression d'utilisateur Keycloak).
+    Synchronise un événement DELETE via les services FHIR.
 
     Logique basée sur les rôles:
-    - Si rôle "professional" → supprime dans tables professionals ET patients
-    - Si rôle "patient" uniquement → supprime dans table patients uniquement
+    - Si rôle "professional" → désactive Professional (FHIR + local)
+    - Si rôle "patient" → désactive Patient (FHIR + local)
 
-    Stratégies supportées:
-    1. soft_delete: Marque comme supprimé (is_active=False, deleted_at renseigné)
-    2. hard_delete: Suppression physique de la base de données (non recommandé en santé)
-    3. anonymize: Anonymisation des données personnelles (RGPD compliant, recommandé)
+    Stratégie par défaut: soft_delete (FHIR active=false + local soft_deleted_at)
+    L'anonymisation définitive se fait après période de grâce (7 jours) via scheduler.
 
     Args:
         db: Session de base de données async
         event: Événement webhook Keycloak
-        strategy: Stratégie de suppression à utiliser
+        strategy: Stratégie de suppression (actuellement seul soft_delete supporté via FHIR)
 
     Returns:
         SyncResult avec les détails de la suppression
@@ -886,24 +1009,25 @@ async def sync_user_deletion(
                     f"Impossible de récupérer les rôles Keycloak pour {event.user_id}, "
                     "fallback sur détection via tables locales"
                 )
-                # On va tenter de détecter les rôles via l'existence des profils
-                has_professional_role = False
-                has_patient_role = False
+                # Détecter les rôles via l'existence des métadonnées GDPR
+                user_roles = []
 
                 # Vérifier si profil professional existe
                 result_prof_check = await db.execute(
-                    select(Professional).where(Professional.keycloak_user_id == event.user_id)
+                    select(ProfessionalGdprMetadata).where(
+                        ProfessionalGdprMetadata.keycloak_user_id == event.user_id
+                    )
                 )
                 if result_prof_check.scalar_one_or_none():
-                    has_professional_role = True
                     user_roles.append("professional")
 
                 # Vérifier si profil patient existe
                 result_patient_check = await db.execute(
-                    select(Patient).where(Patient.keycloak_user_id == event.user_id)
+                    select(PatientGdprMetadata).where(
+                        PatientGdprMetadata.keycloak_user_id == event.user_id
+                    )
                 )
                 if result_patient_check.scalar_one_or_none():
-                    has_patient_role = True
                     user_roles.append("patient")
 
             span.set_attribute("user.roles", ",".join(user_roles))
@@ -919,36 +1043,53 @@ async def sync_user_deletion(
             deleted_tables = []
             patient_id = None
             professional_id = None
+            deletion_reason = event.deletion_reason or "keycloak_account_deleted"
 
-            # Si l'utilisateur a le rôle professional, supprimer dans les deux tables
-            # (car un professional est aussi un patient)
+            # Si l'utilisateur a le rôle professional, désactiver le profil
             if has_professional_role:
-                # Supprimer le profil professional
                 result_prof = await db.execute(
-                    select(Professional).where(Professional.keycloak_user_id == event.user_id)
-                )
-                professional = result_prof.scalar_one_or_none()
-
-                if professional:
-                    professional_id = professional.id
-                    await _apply_deletion_strategy(
-                        db, professional, event, strategy, "professional"
+                    select(ProfessionalGdprMetadata).where(
+                        ProfessionalGdprMetadata.keycloak_user_id == event.user_id,
+                        ProfessionalGdprMetadata.soft_deleted_at.is_(None),
                     )
-                    deleted_tables.append("professionals")
-                    logger.info(f"Professional supprimé: id={professional_id}, strategy={strategy}")
-
-            # Supprimer le profil patient (toujours présent pour patient et professional)
-            if has_patient_role or has_professional_role:
-                result_patient = await db.execute(
-                    select(Patient).where(Patient.keycloak_user_id == event.user_id)
                 )
-                patient = result_patient.scalar_one_or_none()
+                professional_gdpr = result_prof.scalar_one_or_none()
 
-                if patient:
-                    patient_id = patient.id
-                    await _apply_deletion_strategy(db, patient, event, strategy, "patient")
-                    deleted_tables.append("patients")
-                    logger.info(f"Patient supprimé: id={patient_id}, strategy={strategy}")
+                if professional_gdpr:
+                    professional_id = professional_gdpr.id
+                    # Utiliser le service FHIR pour soft delete
+                    deleted = await professional_service.delete_professional(
+                        db=db,
+                        professional_id=professional_id,
+                        current_user_id=event.user_id,
+                        deletion_reason=deletion_reason,
+                    )
+                    if deleted:
+                        deleted_tables.append("professionals")
+                        logger.info(f"Professional désactivé via FHIR: id={professional_id}")
+
+            # Désactiver le profil patient
+            if has_patient_role:
+                result_patient = await db.execute(
+                    select(PatientGdprMetadata).where(
+                        PatientGdprMetadata.keycloak_user_id == event.user_id,
+                        PatientGdprMetadata.soft_deleted_at.is_(None),
+                    )
+                )
+                patient_gdpr = result_patient.scalar_one_or_none()
+
+                if patient_gdpr:
+                    patient_id = patient_gdpr.id
+                    # Utiliser le service FHIR pour soft delete
+                    deleted = await patient_service.delete_patient(
+                        db=db,
+                        patient_id=patient_id,
+                        current_user_id=event.user_id,
+                        deletion_reason=deletion_reason,
+                    )
+                    if deleted:
+                        deleted_tables.append("patients")
+                        logger.info(f"Patient désactivé via FHIR: id={patient_id}")
 
             if not deleted_tables:
                 logger.warning(
@@ -962,9 +1103,7 @@ async def sync_user_deletion(
                     message=f"No profile found for user (roles: {user_roles})",
                 )
 
-            await db.commit()
-
-            # Publier événement de suppression pour les autres services
+            # Publier événement de suppression global pour les autres services
             await publish(
                 "identity.user.deleted",
                 {
@@ -974,8 +1113,8 @@ async def sync_user_deletion(
                     "deletion_strategy": strategy,
                     "deleted_tables": deleted_tables,
                     "user_roles": user_roles,
-                    "deleted_at": datetime.now().isoformat(),
-                    "reason": "keycloak_account_deleted",
+                    "deleted_at": datetime.now(UTC).isoformat(),
+                    "reason": deletion_reason,
                 },
             )
 
@@ -983,7 +1122,7 @@ async def sync_user_deletion(
             span.set_attribute("deletion.professional_id", professional_id or "none")
             span.set_attribute("deletion.tables", ",".join(deleted_tables))
 
-            message = f"User deleted from {', '.join(deleted_tables)} using {strategy} strategy"
+            message = f"User deactivated in {', '.join(deleted_tables)} via FHIR"
 
             return SyncResult(
                 success=True,

@@ -107,3 +107,5 @@ max-complexity = 10
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "tests/*" = ["S101"]
+# keycloak_sync_service a des handlers webhook complexes par nature
+"app/services/keycloak_sync_service.py" = ["C901"]
