@@ -35,6 +35,34 @@ services:
   #     timeout: 5s
   #     retries: 5
 
+  # HAPI FHIR Server - Source of truth pour données démographiques Patient/Professional
+  # hapi-fhir:
+  #   image: hapiproject/hapi:latest
+  #   container_name: core-africare-identity-hapi-fhir
+  #   ports:
+  #     - "8080:8080"
+  #   environment:
+  #     # Configuration JSON FHIR R4
+  #     hapi.fhir.default_encoding: json
+  #     hapi.fhir.fhir_version: R4
+  #     # Désactiver la validation stricte pour dev (activer en prod)
+  #     hapi.fhir.validation.enabled: "false"
+  #     # Base de données H2 embarquée pour dev (PostgreSQL en prod)
+  #     spring.datasource.url: jdbc:h2:mem:hapi;DB_CLOSE_DELAY=-1
+  #     spring.datasource.driver-class-name: org.h2.Driver
+  #     # Activer le mode serveur ouvert pour dev (sécuriser en prod)
+  #     hapi.fhir.openapi_enabled: "true"
+  #   volumes:
+  #     - core_africare_identity_hapi_data:/data/hapi
+  #   networks:
+  #     - africare-network
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8080/fhir/metadata"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 5
+  #     start_period: 60s
+
   # Service Alembic pour migrations de base de données
   alembic:
     build: .
@@ -51,6 +79,7 @@ services:
       KEYCLOAK_SERVER_URL: http://localhost:8080/auth
       KEYCLOAK_REALM: dummy-realm
       KEYCLOAK_CLIENT_ID: dummy-client
+      WEBHOOK_SECRET: dummy-webhook-secret-for-alembic
       OTEL_SERVICE_NAME: core-africare-identity-alembic
       OTEL_EXPORTER_OTLP_ENDPOINT: http://localhost:4317
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
@@ -120,6 +149,7 @@ services:
 volumes:
   core_africare_identity_postgres_data:
   core_africare_identity_redis_data:
+  core_africare_identity_hapi_data:
 
 networks:
   africare-network:

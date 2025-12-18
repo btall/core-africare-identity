@@ -27,6 +27,7 @@ from app.core.webhook_streams import (
     start_webhook_consumer,
     stop_webhook_consumer,
 )
+from app.infrastructure.fhir.client import FHIRClient
 from app.services.webhook_processor import route_webhook_event
 
 # from app.services import event_service  # Disabled - using Redis instead of Azure Event Hub
@@ -40,6 +41,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """
     Gère le cycle de vie de l'application:
+    - Initialise le client FHIR (httpx async).
     - Initialise le système d'événements (Redis Pub/Sub + Streams).
     - Crée les tables de base de données.
     - Démarre les consommateurs d'événements et webhook worker.
@@ -47,22 +49,30 @@ async def lifespan(app: FastAPI):
     """
     logger.info("=== Application Startup ===")
 
-    # 1. Créer les tables de base de données
+    # 1. Initialiser le client FHIR
+    fhir_client = FHIRClient(
+        base_url=settings.HAPI_FHIR_BASE_URL,
+        timeout=settings.HAPI_FHIR_TIMEOUT,
+    )
+    app.state.fhir_client = fhir_client
+    logger.info(f"Client FHIR initialisé: {settings.HAPI_FHIR_BASE_URL}")
+
+    # 2. Créer les tables de base de données
     await create_db_and_tables()
     logger.info("Tables de base de données créées")
 
-    # 2. Utiliser le lifespan des événements (Redis Pub/Sub)
+    # 3. Utiliser le lifespan des événements (Redis Pub/Sub)
     async with events_lifespan(app):
         try:
-            # 3. Initialiser Redis Streams pour webhooks
+            # 4. Initialiser Redis Streams pour webhooks
             await init_webhook_redis()
             logger.info("Redis Streams initialisé pour webhooks")
 
-            # 4. Enregistrer le handler webhook
+            # 5. Enregistrer le handler webhook
             register_webhook_handler(route_webhook_event)
             logger.info("Handler webhook enregistré")
 
-            # 5. Démarrer le consumer webhook en background
+            # 6. Démarrer le consumer webhook en background
             await start_webhook_consumer()
             logger.info("Webhook consumer démarré en background")
 
@@ -70,10 +80,12 @@ async def lifespan(app: FastAPI):
             yield
 
         finally:
-            # Arrêter tous les consommateurs
+            # Arrêter tous les consommateurs et fermer les clients
             logger.info("=== Application Shutdown ===")
             await stop_webhook_consumer()
             await close_webhook_redis()
+            await fhir_client.close()
+            logger.info("Client FHIR fermé")
             logger.info("=== Application Shutdown Complete ===")
 
 
