@@ -27,7 +27,7 @@ from app.core.webhook_streams import (
     start_webhook_consumer,
     stop_webhook_consumer,
 )
-from app.infrastructure.fhir.client import FHIRClient
+from app.infrastructure.fhir.client import close_fhir_client, initialize_fhir_client
 from app.services.webhook_processor import route_webhook_event
 
 # from app.services import event_service  # Disabled - using Redis instead of Azure Event Hub
@@ -49,12 +49,11 @@ async def lifespan(app: FastAPI):
     """
     logger.info("=== Application Startup ===")
 
-    # 1. Initialiser le client FHIR
-    fhir_client = FHIRClient(
+    # 1. Initialiser le client FHIR (singleton module-level)
+    await initialize_fhir_client(
         base_url=settings.HAPI_FHIR_BASE_URL,
         timeout=settings.HAPI_FHIR_TIMEOUT,
     )
-    app.state.fhir_client = fhir_client
     logger.info(f"Client FHIR initialisé: {settings.HAPI_FHIR_BASE_URL}")
 
     # 2. Créer les tables de base de données
@@ -84,7 +83,7 @@ async def lifespan(app: FastAPI):
             logger.info("=== Application Shutdown ===")
             await stop_webhook_consumer()
             await close_webhook_redis()
-            await fhir_client.close()
+            await close_fhir_client()
             logger.info("Client FHIR fermé")
             logger.info("=== Application Shutdown Complete ===")
 

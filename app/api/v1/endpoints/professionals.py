@@ -10,9 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.dependencies import get_fhir_client
 from app.core.security import User, get_current_user, require_roles
-from app.infrastructure.fhir.client import FHIRClient
 from app.schemas.professional import (
     ProfessionalCreate,
     ProfessionalListResponse,
@@ -35,7 +33,6 @@ router = APIRouter()
 async def create_professional(
     professional: ProfessionalCreate,
     db: AsyncSession = Depends(get_session),
-    fhir_client: FHIRClient = Depends(get_fhir_client),
     current_user: User = Depends(require_roles("admin")),
 ) -> ProfessionalResponse:
     """
@@ -49,7 +46,6 @@ async def create_professional(
     try:
         created_professional = await professional_service.create_professional(
             db=db,
-            fhir_client=fhir_client,
             professional_data=professional,
             current_user_id=current_user.user_id,
         )
@@ -86,7 +82,6 @@ async def create_professional(
 async def get_professional(
     professional_id: int,
     db: AsyncSession = Depends(get_session),
-    fhir_client: FHIRClient = Depends(get_fhir_client),
     current_user: User = Depends(get_current_user),
 ) -> ProfessionalResponse:
     """
@@ -95,7 +90,7 @@ async def get_professional(
     Permissions requises : Authenticated
     """
     professional = await professional_service.get_professional(
-        db=db, fhir_client=fhir_client, professional_id=professional_id
+        db=db, professional_id=professional_id
     )
     if not professional:
         raise HTTPException(
@@ -116,7 +111,6 @@ async def get_professional(
 async def get_professional_by_keycloak_id(
     keycloak_user_id: str,
     db: AsyncSession = Depends(get_session),
-    fhir_client: FHIRClient = Depends(get_fhir_client),
     current_user: User = Depends(get_current_user),
 ) -> ProfessionalResponse:
     """
@@ -126,7 +120,6 @@ async def get_professional_by_keycloak_id(
     """
     professional = await professional_service.get_professional_by_keycloak_id(
         db=db,
-        fhir_client=fhir_client,
         keycloak_user_id=keycloak_user_id,
     )
     if not professional:
@@ -160,7 +153,6 @@ async def get_professional_by_keycloak_id(
 async def get_professional_by_professional_id(
     professional_id: str,
     db: AsyncSession = Depends(get_session),
-    fhir_client: FHIRClient = Depends(get_fhir_client),
     current_user: User = Depends(get_current_user),
 ) -> ProfessionalResponse:
     """
@@ -170,7 +162,6 @@ async def get_professional_by_professional_id(
     """
     professional = await professional_service.get_professional_by_professional_id(
         db=db,
-        fhir_client=fhir_client,
         professional_id=professional_id,
     )
     if not professional:
@@ -193,7 +184,6 @@ async def update_professional(
     professional_id: int,
     professional_update: ProfessionalUpdate,
     db: AsyncSession = Depends(get_session),
-    fhir_client: FHIRClient = Depends(get_fhir_client),
     current_user: User = Depends(get_current_user),
 ) -> ProfessionalResponse:
     """
@@ -203,7 +193,7 @@ async def update_professional(
     """
     # Récupérer le professionnel existant pour vérification
     existing_professional = await professional_service.get_professional(
-        db=db, fhir_client=fhir_client, professional_id=professional_id
+        db=db, professional_id=professional_id
     )
     if not existing_professional:
         raise HTTPException(
@@ -226,7 +216,6 @@ async def update_professional(
 
     updated_professional = await professional_service.update_professional(
         db=db,
-        fhir_client=fhir_client,
         professional_id=professional_id,
         professional_data=professional_update,
         current_user_id=current_user.user_id,
@@ -245,7 +234,6 @@ async def update_professional(
 async def delete_professional(
     professional_id: int,
     db: AsyncSession = Depends(get_session),
-    fhir_client: FHIRClient = Depends(get_fhir_client),
     current_user: User = Depends(get_current_user),
 ) -> None:
     """
@@ -255,7 +243,6 @@ async def delete_professional(
     """
     deleted = await professional_service.delete_professional(
         db=db,
-        fhir_client=fhir_client,
         professional_id=professional_id,
         current_user_id=current_user.user_id,
     )
@@ -288,7 +275,6 @@ async def search_professionals(
     skip: int = Query(0, ge=0, description="Nombre d'éléments à sauter"),
     limit: int = Query(20, ge=1, le=100, description="Nombre d'éléments à retourner"),
     db: AsyncSession = Depends(get_session),
-    fhir_client: FHIRClient = Depends(get_fhir_client),
     current_user: User = Depends(get_current_user),
 ) -> ProfessionalListResponse:
     """
@@ -314,9 +300,7 @@ async def search_professionals(
     )
 
     # Rechercher
-    professionals, total = await professional_service.search_professionals(
-        db=db, fhir_client=fhir_client, filters=filters
-    )
+    professionals, total = await professional_service.search_professionals(db=db, filters=filters)
 
     return ProfessionalListResponse(
         items=professionals,
@@ -336,7 +320,6 @@ async def search_professionals(
 async def verify_professional(
     professional_id: int,
     db: AsyncSession = Depends(get_session),
-    fhir_client: FHIRClient = Depends(get_fhir_client),
     current_user: User = Depends(get_current_user),
 ) -> ProfessionalResponse:
     """
@@ -346,7 +329,6 @@ async def verify_professional(
     """
     verified_professional = await professional_service.verify_professional(
         db=db,
-        fhir_client=fhir_client,
         professional_id=professional_id,
         current_user_id=current_user.user_id,
     )
@@ -371,7 +353,6 @@ async def toggle_availability(
     professional_id: int,
     is_available: bool = Query(..., description="Disponible (true) ou indisponible (false)"),
     db: AsyncSession = Depends(get_session),
-    fhir_client: FHIRClient = Depends(get_fhir_client),
     current_user: User = Depends(get_current_user),
 ) -> ProfessionalResponse:
     """
@@ -381,7 +362,7 @@ async def toggle_availability(
     """
     # Récupérer le professionnel pour vérification
     professional = await professional_service.get_professional(
-        db=db, fhir_client=fhir_client, professional_id=professional_id
+        db=db, professional_id=professional_id
     )
     if not professional:
         raise HTTPException(
@@ -404,7 +385,6 @@ async def toggle_availability(
 
     updated_professional = await professional_service.toggle_availability(
         db=db,
-        fhir_client=fhir_client,
         professional_id=professional_id,
         is_available=is_available,
         current_user_id=current_user.user_id,

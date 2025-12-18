@@ -10,9 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_session
-from app.core.dependencies import get_fhir_client
 from app.core.security import User, get_current_user, require_roles
-from app.infrastructure.fhir.client import FHIRClient
 from app.schemas.patient import (
     PatientCreate,
     PatientListResponse,
@@ -36,7 +34,6 @@ router = APIRouter()
 async def create_patient(
     patient: PatientCreate,
     db: AsyncSession = Depends(get_session),
-    fhir_client: FHIRClient = Depends(get_fhir_client),
     current_user: User = Depends(get_current_user),
 ) -> PatientResponse:
     """
@@ -47,7 +44,6 @@ async def create_patient(
     try:
         created_patient = await patient_service.create_patient(
             db=db,
-            fhir_client=fhir_client,
             patient_data=patient,
             current_user_id=current_user.user_id,
         )
@@ -84,7 +80,6 @@ async def create_patient(
 async def get_patient(
     patient_id: int,
     db: AsyncSession = Depends(get_session),
-    fhir_client: FHIRClient = Depends(get_fhir_client),
     current_user: User = Depends(get_current_user),
 ) -> PatientResponse:
     """
@@ -92,9 +87,7 @@ async def get_patient(
 
     Permissions requises : Authenticated
     """
-    patient = await patient_service.get_patient(
-        db=db, fhir_client=fhir_client, patient_id=patient_id
-    )
+    patient = await patient_service.get_patient(db=db, patient_id=patient_id)
     if not patient:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -114,7 +107,6 @@ async def get_patient(
 async def get_patient_by_keycloak_id(
     keycloak_user_id: str,
     db: AsyncSession = Depends(get_session),
-    fhir_client: FHIRClient = Depends(get_fhir_client),
     current_user: User = Depends(get_current_user),
 ) -> PatientResponse:
     """
@@ -124,7 +116,6 @@ async def get_patient_by_keycloak_id(
     """
     patient = await patient_service.get_patient_by_keycloak_id(
         db=db,
-        fhir_client=fhir_client,
         keycloak_user_id=keycloak_user_id,
     )
     if not patient:
@@ -160,7 +151,6 @@ async def update_patient(
     patient_id: int,
     patient_update: PatientUpdate,
     db: AsyncSession = Depends(get_session),
-    fhir_client: FHIRClient = Depends(get_fhir_client),
     current_user: User = Depends(get_current_user),
 ) -> PatientResponse:
     """
@@ -169,9 +159,7 @@ async def update_patient(
     Permissions requises : Patient owner, admin:medical ou professional
     """
     # Récupérer le patient existant pour vérification
-    existing_patient = await patient_service.get_patient(
-        db=db, fhir_client=fhir_client, patient_id=patient_id
-    )
+    existing_patient = await patient_service.get_patient(db=db, patient_id=patient_id)
     if not existing_patient:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -193,7 +181,6 @@ async def update_patient(
 
     updated_patient = await patient_service.update_patient(
         db=db,
-        fhir_client=fhir_client,
         patient_id=patient_id,
         patient_data=patient_update,
         current_user_id=current_user.user_id,
@@ -212,7 +199,6 @@ async def update_patient(
 async def delete_patient(
     patient_id: int,
     db: AsyncSession = Depends(get_session),
-    fhir_client: FHIRClient = Depends(get_fhir_client),
     current_user: User = Depends(get_current_user),
 ) -> None:
     """
@@ -222,7 +208,6 @@ async def delete_patient(
     """
     deleted = await patient_service.delete_patient(
         db=db,
-        fhir_client=fhir_client,
         patient_id=patient_id,
         current_user_id=current_user.user_id,
     )
@@ -255,7 +240,6 @@ async def search_patients(
     skip: int = Query(0, ge=0, description="Nombre d'éléments à sauter"),
     limit: int = Query(20, ge=1, le=100, description="Nombre d'éléments à retourner"),
     db: AsyncSession = Depends(get_session),
-    fhir_client: FHIRClient = Depends(get_fhir_client),
     current_user: User = Depends(get_current_user),
 ) -> PatientListResponse:
     """
@@ -280,9 +264,7 @@ async def search_patients(
     )
 
     # Rechercher
-    patients, total = await patient_service.search_patients(
-        db=db, fhir_client=fhir_client, filters=filters
-    )
+    patients, total = await patient_service.search_patients(db=db, filters=filters)
 
     return PatientListResponse(
         items=patients,
@@ -302,7 +284,6 @@ async def search_patients(
 async def verify_patient(
     patient_id: int,
     db: AsyncSession = Depends(get_session),
-    fhir_client: FHIRClient = Depends(get_fhir_client),
     current_user: User = Depends(get_current_user),
 ) -> PatientResponse:
     """
@@ -312,7 +293,6 @@ async def verify_patient(
     """
     verified_patient = await patient_service.verify_patient(
         db=db,
-        fhir_client=fhir_client,
         patient_id=patient_id,
         current_user_id=current_user.user_id,
     )

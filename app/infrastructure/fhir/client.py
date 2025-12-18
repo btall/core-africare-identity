@@ -344,3 +344,71 @@ class FHIRClient:
         if self._client:
             await self._client.aclose()
             self._client = None
+
+
+# =============================================================================
+# Singleton Pattern - Module-level FHIR client
+# =============================================================================
+
+_fhir_client: FHIRClient | None = None
+
+
+def get_fhir_client() -> FHIRClient:
+    """Get the singleton FHIR client instance.
+
+    This function provides access to the module-level FHIR client that is
+    initialized during application startup (lifespan).
+
+    Returns:
+        FHIRClient: The initialized FHIR client
+
+    Raises:
+        RuntimeError: If client has not been initialized (app not started)
+
+    Example:
+        ```python
+        from app.infrastructure.fhir.client import get_fhir_client
+
+        async def my_service_function(db):
+            fhir_client = get_fhir_client()
+            patient = await fhir_client.read("Patient", "123")
+        ```
+    """
+    if _fhir_client is None:
+        raise RuntimeError(
+            "FHIR client not initialized. Ensure the application lifespan has started properly."
+        )
+    return _fhir_client
+
+
+async def initialize_fhir_client(
+    base_url: str | None = None,
+    timeout: int | None = None,
+) -> FHIRClient:
+    """Initialize the singleton FHIR client.
+
+    Called during application startup (lifespan). Creates the module-level
+    FHIR client instance that will be used throughout the application.
+
+    Args:
+        base_url: FHIR server base URL. Defaults to settings.
+        timeout: Request timeout in seconds. Defaults to settings.
+
+    Returns:
+        FHIRClient: The initialized client instance
+    """
+    global _fhir_client
+    _fhir_client = FHIRClient(base_url=base_url, timeout=timeout)
+    return _fhir_client
+
+
+async def close_fhir_client() -> None:
+    """Close the singleton FHIR client.
+
+    Called during application shutdown (lifespan). Properly closes the
+    HTTP client and releases resources.
+    """
+    global _fhir_client
+    if _fhir_client is not None:
+        await _fhir_client.close()
+        _fhir_client = None

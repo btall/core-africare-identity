@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import publish
-from app.infrastructure.fhir.client import FHIRClient
+from app.infrastructure.fhir.client import get_fhir_client
 from app.infrastructure.fhir.exceptions import FHIRResourceNotFoundError
 from app.infrastructure.fhir.identifiers import KEYCLOAK_SYSTEM, PROFESSIONAL_LICENSE_SYSTEM
 from app.infrastructure.fhir.mappers.professional_mapper import ProfessionalMapper
@@ -32,7 +32,6 @@ tracer = trace.get_tracer(__name__)
 
 async def create_professional(
     db: AsyncSession,
-    fhir_client: FHIRClient,
     professional_data: ProfessionalCreate,
     current_user_id: str,
 ) -> ProfessionalResponse:
@@ -48,7 +47,6 @@ async def create_professional(
 
     Args:
         db: Session de base de donnees async
-        fhir_client: Client FHIR pour HAPI
         professional_data: Donnees du professionnel a creer
         current_user_id: ID Keycloak de l'utilisateur createur
 
@@ -59,6 +57,7 @@ async def create_professional(
         FHIROperationError: Si creation FHIR echoue
         IntegrityError: Si keycloak_user_id existe deja
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("create_professional") as span:
         span.set_attribute("professional.keycloak_user_id", professional_data.keycloak_user_id)
 
@@ -112,7 +111,6 @@ async def create_professional(
 
 async def get_professional(
     db: AsyncSession,
-    fhir_client: FHIRClient,
     professional_id: int,
 ) -> ProfessionalResponse | None:
     """
@@ -125,12 +123,12 @@ async def get_professional(
 
     Args:
         db: Session de base de donnees async
-        fhir_client: Client FHIR pour HAPI
         professional_id: ID numerique du professionnel
 
     Returns:
         ProfessionalResponse ou None si non trouve
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("get_professional") as span:
         span.set_attribute("professional.id", professional_id)
 
@@ -165,7 +163,6 @@ async def get_professional(
 
 async def get_professional_by_keycloak_id(
     db: AsyncSession,
-    fhir_client: FHIRClient,
     keycloak_user_id: str,
 ) -> ProfessionalResponse | None:
     """
@@ -173,12 +170,12 @@ async def get_professional_by_keycloak_id(
 
     Args:
         db: Session de base de donnees async
-        fhir_client: Client FHIR pour HAPI
         keycloak_user_id: UUID Keycloak de l'utilisateur
 
     Returns:
         ProfessionalResponse ou None si non trouve
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("get_professional_by_keycloak_id") as span:
         span.set_attribute("professional.keycloak_user_id", keycloak_user_id)
 
@@ -212,7 +209,6 @@ async def get_professional_by_keycloak_id(
 
 async def get_professional_by_professional_id(
     db: AsyncSession,
-    fhir_client: FHIRClient,
     professional_id: str,
 ) -> ProfessionalResponse | None:
     """
@@ -220,12 +216,12 @@ async def get_professional_by_professional_id(
 
     Args:
         db: Session de base de donnees async
-        fhir_client: Client FHIR pour HAPI
         professional_id: Numero d'ordre (CNOM, etc.)
 
     Returns:
         ProfessionalResponse ou None si non trouve
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("get_professional_by_professional_id") as span:
         span.set_attribute("professional.professional_id", professional_id)
 
@@ -266,7 +262,6 @@ async def get_professional_by_professional_id(
 
 async def update_professional(
     db: AsyncSession,
-    fhir_client: FHIRClient,
     professional_id: int,
     professional_data: ProfessionalUpdate,
     current_user_id: str,
@@ -284,7 +279,6 @@ async def update_professional(
 
     Args:
         db: Session de base de donnees async
-        fhir_client: Client FHIR pour HAPI
         professional_id: ID du professionnel a mettre a jour
         professional_data: Nouvelles donnees du professionnel
         current_user_id: ID Keycloak de l'utilisateur modificateur
@@ -292,6 +286,7 @@ async def update_professional(
     Returns:
         ProfessionalResponse mis a jour ou None si non trouve
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("update_professional") as span:
         span.set_attribute("professional.id", professional_id)
 
@@ -355,7 +350,6 @@ async def update_professional(
 
 async def delete_professional(
     db: AsyncSession,
-    fhir_client: FHIRClient,
     professional_id: int,
     current_user_id: str,
     deletion_reason: str = "user_request",
@@ -372,7 +366,6 @@ async def delete_professional(
 
     Args:
         db: Session de base de donnees async
-        fhir_client: Client FHIR pour HAPI
         professional_id: ID du professionnel a supprimer
         current_user_id: ID Keycloak de l'utilisateur
         deletion_reason: Raison de la suppression
@@ -380,6 +373,7 @@ async def delete_professional(
     Returns:
         True si supprime, False si non trouve
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("delete_professional") as span:
         span.set_attribute("professional.id", professional_id)
 
@@ -441,7 +435,6 @@ async def delete_professional(
 
 async def search_professionals(
     db: AsyncSession,
-    fhir_client: FHIRClient,
     filters: ProfessionalSearchFilters,
 ) -> tuple[list[ProfessionalListItem], int]:
     """
@@ -453,12 +446,12 @@ async def search_professionals(
 
     Args:
         db: Session de base de donnees async
-        fhir_client: Client FHIR pour HAPI
         filters: Criteres de recherche et pagination
 
     Returns:
         Tuple (liste des professionnels, nombre total de resultats)
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("search_professionals") as span:
         # Construire params FHIR
         fhir_params = _build_fhir_search_params(filters)
@@ -529,7 +522,6 @@ async def search_professionals(
 
 async def verify_professional(
     db: AsyncSession,
-    fhir_client: FHIRClient,
     professional_id: int,
     current_user_id: str,
 ) -> ProfessionalResponse | None:
@@ -538,13 +530,13 @@ async def verify_professional(
 
     Args:
         db: Session de base de donnees async
-        fhir_client: Client FHIR pour HAPI
         professional_id: ID du professionnel
         current_user_id: ID Keycloak de l'admin verifiant
 
     Returns:
         ProfessionalResponse si verifie, None si non trouve
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("verify_professional") as span:
         span.set_attribute("professional.id", professional_id)
 
@@ -594,7 +586,6 @@ async def verify_professional(
 
 async def toggle_availability(
     db: AsyncSession,
-    fhir_client: FHIRClient,
     professional_id: int,
     is_available: bool,
     current_user_id: str,
@@ -606,7 +597,6 @@ async def toggle_availability(
 
     Args:
         db: Session de base de donnees async
-        fhir_client: Client FHIR pour HAPI
         professional_id: ID du professionnel
         is_available: True pour disponible, False pour indisponible
         current_user_id: ID Keycloak
@@ -614,6 +604,7 @@ async def toggle_availability(
     Returns:
         ProfessionalResponse si mis a jour, None si non trouve
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("toggle_availability") as span:
         span.set_attribute("professional.id", professional_id)
         span.set_attribute("professional.is_available", is_available)

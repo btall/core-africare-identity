@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import publish
-from app.infrastructure.fhir.client import FHIRClient
+from app.infrastructure.fhir.client import get_fhir_client
 from app.infrastructure.fhir.exceptions import FHIRResourceNotFoundError
 from app.infrastructure.fhir.identifiers import KEYCLOAK_SYSTEM, NATIONAL_ID_SYSTEM
 from app.infrastructure.fhir.mappers.patient_mapper import PatientMapper
@@ -32,7 +32,6 @@ tracer = trace.get_tracer(__name__)
 
 async def create_patient(
     db: AsyncSession,
-    fhir_client: FHIRClient,
     patient_data: PatientCreate,
     current_user_id: str,
 ) -> PatientResponse:
@@ -48,7 +47,6 @@ async def create_patient(
 
     Args:
         db: Session de base de donnees async
-        fhir_client: Client FHIR pour HAPI
         patient_data: Donnees du patient a creer
         current_user_id: ID Keycloak de l'utilisateur createur
 
@@ -59,6 +57,7 @@ async def create_patient(
         FHIROperationError: Si creation FHIR echoue
         IntegrityError: Si keycloak_user_id existe deja
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("create_patient") as span:
         span.set_attribute("patient.keycloak_user_id", patient_data.keycloak_user_id)
 
@@ -109,7 +108,6 @@ async def create_patient(
 
 async def get_patient(
     db: AsyncSession,
-    fhir_client: FHIRClient,
     patient_id: int,
 ) -> PatientResponse | None:
     """
@@ -122,12 +120,12 @@ async def get_patient(
 
     Args:
         db: Session de base de donnees async
-        fhir_client: Client FHIR pour HAPI
         patient_id: ID numerique du patient
 
     Returns:
         PatientResponse ou None si non trouve
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("get_patient") as span:
         span.set_attribute("patient.id", patient_id)
 
@@ -162,7 +160,6 @@ async def get_patient(
 
 async def get_patient_by_keycloak_id(
     db: AsyncSession,
-    fhir_client: FHIRClient,
     keycloak_user_id: str,
 ) -> PatientResponse | None:
     """
@@ -170,12 +167,12 @@ async def get_patient_by_keycloak_id(
 
     Args:
         db: Session de base de donnees async
-        fhir_client: Client FHIR pour HAPI
         keycloak_user_id: UUID Keycloak de l'utilisateur
 
     Returns:
         PatientResponse ou None si non trouve
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("get_patient_by_keycloak_id") as span:
         span.set_attribute("patient.keycloak_user_id", keycloak_user_id)
 
@@ -209,7 +206,6 @@ async def get_patient_by_keycloak_id(
 
 async def get_patient_by_national_id(
     db: AsyncSession,
-    fhir_client: FHIRClient,
     national_id: str,
 ) -> PatientResponse | None:
     """
@@ -217,12 +213,12 @@ async def get_patient_by_national_id(
 
     Args:
         db: Session de base de donnees async
-        fhir_client: Client FHIR pour HAPI
         national_id: Identifiant national (CNI, passeport, etc.)
 
     Returns:
         PatientResponse ou None si non trouve
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("get_patient_by_national_id") as span:
         span.set_attribute("patient.national_id", national_id)
 
@@ -263,7 +259,6 @@ async def get_patient_by_national_id(
 
 async def update_patient(
     db: AsyncSession,
-    fhir_client: FHIRClient,
     patient_id: int,
     patient_data: PatientUpdate,
     current_user_id: str,
@@ -281,7 +276,6 @@ async def update_patient(
 
     Args:
         db: Session de base de donnees async
-        fhir_client: Client FHIR pour HAPI
         patient_id: ID du patient a mettre a jour
         patient_data: Nouvelles donnees du patient
         current_user_id: ID Keycloak de l'utilisateur modificateur
@@ -289,6 +283,7 @@ async def update_patient(
     Returns:
         PatientResponse mis a jour ou None si non trouve
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("update_patient") as span:
         span.set_attribute("patient.id", patient_id)
 
@@ -348,7 +343,6 @@ async def update_patient(
 
 async def delete_patient(
     db: AsyncSession,
-    fhir_client: FHIRClient,
     patient_id: int,
     current_user_id: str,
     deletion_reason: str = "user_request",
@@ -365,7 +359,6 @@ async def delete_patient(
 
     Args:
         db: Session de base de donnees async
-        fhir_client: Client FHIR pour HAPI
         patient_id: ID du patient a supprimer
         current_user_id: ID Keycloak de l'utilisateur
         deletion_reason: Raison de la suppression
@@ -373,6 +366,7 @@ async def delete_patient(
     Returns:
         True si supprime, False si non trouve
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("delete_patient") as span:
         span.set_attribute("patient.id", patient_id)
 
@@ -434,7 +428,6 @@ async def delete_patient(
 
 async def search_patients(
     db: AsyncSession,
-    fhir_client: FHIRClient,
     filters: PatientSearchFilters,
 ) -> tuple[list[PatientListItem], int]:
     """
@@ -446,12 +439,12 @@ async def search_patients(
 
     Args:
         db: Session de base de donnees async
-        fhir_client: Client FHIR pour HAPI
         filters: Criteres de recherche et pagination
 
     Returns:
         Tuple (liste des patients, nombre total de resultats)
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("search_patients") as span:
         # Construire params FHIR
         fhir_params = _build_fhir_search_params(filters)
