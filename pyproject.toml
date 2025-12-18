@@ -32,8 +32,8 @@ tenacity = "^9.1.2"
 # Redis messaging (Phase 1 MVP)
 redis = {extras = ["hiredis"], version = "^5.2.0"}
 bcrypt = "^5.0.0"
-# FHIR integration (HAPI FHIR)
-fhir-resources = "^7.1.0"
+# FHIR integration (HAPI FHIR) - v8+ uses Pydantic v2 natively
+fhir-resources = "^8.1.0"
 httpx = "^0.28.0"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.4.2"

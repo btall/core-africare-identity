@@ -13,7 +13,7 @@ from fhir.resources.extension import Extension
 from fhir.resources.humanname import HumanName
 from fhir.resources.identifier import Identifier
 from fhir.resources.practitioner import Practitioner as FHIRPractitioner
-from fhir.resources.practitioner import PractitionerQualification
+from fhir.resources.practitioner import PractitionerCommunication, PractitionerQualification
 
 from app.infrastructure.fhir.identifiers import (
     KEYCLOAK_SYSTEM,
@@ -208,8 +208,8 @@ def _extract_languages(practitioner: FHIRPractitioner) -> str:
 
     languages = []
     for comm in practitioner.communication:
-        if comm.coding:
-            for coding in comm.coding:
+        if comm.language and comm.language.coding:
+            for coding in comm.language.coding:
                 if coding.code:
                     languages.append(coding.code)
 
@@ -384,17 +384,19 @@ def _build_experience_extension(years: int | None) -> Extension | None:
     return Extension(url=EXPERIENCE_EXTENSION_URL, valueInteger=years)
 
 
-def _build_communication(languages_spoken: str) -> list[CodeableConcept]:
+def _build_communication(languages_spoken: str) -> list[PractitionerCommunication]:
     """Build FHIR communication for spoken languages."""
     languages = languages_spoken.split(",") if languages_spoken else ["fr"]
     return [
-        CodeableConcept(
-            coding=[
-                Coding(
-                    system="urn:ietf:bcp:47",
-                    code=lang.strip(),
-                )
-            ]
+        PractitionerCommunication(
+            language=CodeableConcept(
+                coding=[
+                    Coding(
+                        system="urn:ietf:bcp:47",
+                        code=lang.strip(),
+                    )
+                ]
+            )
         )
         for lang in languages
         if lang.strip()

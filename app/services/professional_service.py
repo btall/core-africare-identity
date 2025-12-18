@@ -529,19 +529,21 @@ async def search_professionals(
 
 async def verify_professional(
     db: AsyncSession,
+    fhir_client: FHIRClient,
     professional_id: int,
     current_user_id: str,
-) -> bool:
+) -> ProfessionalResponse | None:
     """
-    Marque un professionnel comme verifie (operation locale uniquement).
+    Marque un professionnel comme verifie.
 
     Args:
         db: Session de base de donnees async
+        fhir_client: Client FHIR pour HAPI
         professional_id: ID du professionnel
         current_user_id: ID Keycloak de l'admin verifiant
 
     Returns:
-        True si verifie, False si non trouve
+        ProfessionalResponse si verifie, None si non trouve
     """
     with tracer.start_as_current_span("verify_professional") as span:
         span.set_attribute("professional.id", professional_id)
@@ -555,7 +557,7 @@ async def verify_professional(
         gdpr_metadata = result.scalar_one_or_none()
 
         if not gdpr_metadata:
-            return False
+            return None
 
         gdpr_metadata.is_verified = True
         gdpr_metadata.updated_by = current_user_id
@@ -578,15 +580,25 @@ async def verify_professional(
             },
         )
 
-        return True
+        # Fetch FHIR resource and return full response
+        fhir_practitioner = await fhir_client.read("Practitioner", gdpr_metadata.fhir_resource_id)
+        if not fhir_practitioner:
+            return None
+
+        return ProfessionalMapper.from_fhir(
+            fhir_practitioner,
+            gdpr_metadata.id,
+            gdpr_metadata.to_dict(),
+        )
 
 
 async def toggle_availability(
     db: AsyncSession,
+    fhir_client: FHIRClient,
     professional_id: int,
     is_available: bool,
     current_user_id: str,
-) -> bool:
+) -> ProfessionalResponse | None:
     """
     Change la disponibilite d'un professionnel pour consultations.
 
@@ -594,12 +606,13 @@ async def toggle_availability(
 
     Args:
         db: Session de base de donnees async
+        fhir_client: Client FHIR pour HAPI
         professional_id: ID du professionnel
         is_available: True pour disponible, False pour indisponible
         current_user_id: ID Keycloak
 
     Returns:
-        True si mis a jour, False si non trouve
+        ProfessionalResponse si mis a jour, None si non trouve
     """
     with tracer.start_as_current_span("toggle_availability") as span:
         span.set_attribute("professional.id", professional_id)
@@ -614,7 +627,7 @@ async def toggle_availability(
         gdpr_metadata = result.scalar_one_or_none()
 
         if not gdpr_metadata:
-            return False
+            return None
 
         gdpr_metadata.is_available = is_available
         gdpr_metadata.updated_by = current_user_id
@@ -638,7 +651,16 @@ async def toggle_availability(
             },
         )
 
-        return True
+        # Fetch FHIR resource and return full response
+        fhir_practitioner = await fhir_client.read("Practitioner", gdpr_metadata.fhir_resource_id)
+        if not fhir_practitioner:
+            return None
+
+        return ProfessionalMapper.from_fhir(
+            fhir_practitioner,
+            gdpr_metadata.id,
+            gdpr_metadata.to_dict(),
+        )
 
 
 async def get_professional_gdpr_metadata(

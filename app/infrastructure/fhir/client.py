@@ -97,7 +97,7 @@ class FHIRClient:
             FHIRConnectionError: If connection to server fails
             FHIROperationError: If server returns an error
         """
-        resource_type = resource.resource_type
+        resource_type = resource.get_resource_type()
         with tracer.start_as_current_span(f"fhir_create_{resource_type}") as span:
             span.set_attribute("fhir.resource_type", resource_type)
 
@@ -200,7 +200,7 @@ class FHIRClient:
             FHIRConnectionError: If connection to server fails
             FHIROperationError: If server returns an error
         """
-        resource_type = resource.resource_type
+        resource_type = resource.get_resource_type()
         resource_id = resource.id
 
         with tracer.start_as_current_span(f"fhir_update_{resource_type}") as span:
