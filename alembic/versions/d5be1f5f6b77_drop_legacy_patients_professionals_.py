@@ -286,9 +286,7 @@ def downgrade() -> None:
         ["professional_id"],
         unique=False,
     )
-    op.create_index(
-        "ix_professionals_is_active", "professionals", ["is_active"], unique=False
-    )
+    op.create_index("ix_professionals_is_active", "professionals", ["is_active"], unique=False)
     op.create_index(
         "ix_professionals_under_investigation",
         "professionals",
@@ -307,9 +305,7 @@ def downgrade() -> None:
         ["soft_deleted_at"],
         unique=False,
     )
-    op.create_index(
-        "ix_professionals_deleted_at", "professionals", ["deleted_at"], unique=False
-    )
+    op.create_index("ix_professionals_deleted_at", "professionals", ["deleted_at"], unique=False)
     op.create_index(
         "ix_professionals_anonymized_at",
         "professionals",
@@ -347,9 +343,7 @@ def downgrade() -> None:
         ),
         sa.Column("date_of_birth", sa.Date(), nullable=False, comment="Date de naissance"),
         sa.Column("gender", sa.String(length=10), nullable=False, comment="Sexe biologique"),
-        sa.Column(
-            "email", sa.String(length=255), nullable=True, comment="Adresse email"
-        ),
+        sa.Column("email", sa.String(length=255), nullable=True, comment="Adresse email"),
         sa.Column(
             "phone",
             sa.String(length=20),
@@ -375,9 +369,7 @@ def downgrade() -> None:
             comment="Complément d'adresse",
         ),
         sa.Column("city", sa.String(length=100), nullable=True, comment="Ville"),
-        sa.Column(
-            "region", sa.String(length=100), nullable=True, comment="Région administrative"
-        ),
+        sa.Column("region", sa.String(length=100), nullable=True, comment="Région administrative"),
         sa.Column(
             "postal_code",
             sa.String(length=20),
@@ -520,9 +512,7 @@ def downgrade() -> None:
         sa.UniqueConstraint("national_id"),
     )
     op.create_index("ix_patients_id", "patients", ["id"], unique=False)
-    op.create_index(
-        "ix_patients_keycloak_user_id", "patients", ["keycloak_user_id"], unique=False
-    )
+    op.create_index("ix_patients_keycloak_user_id", "patients", ["keycloak_user_id"], unique=False)
     op.create_index("ix_patients_national_id", "patients", ["national_id"], unique=False)
     op.create_index("ix_patients_email", "patients", ["email"], unique=False)
     op.create_index("ix_patients_is_active", "patients", ["is_active"], unique=False)
@@ -532,13 +522,7 @@ def downgrade() -> None:
         ["under_investigation"],
         unique=False,
     )
-    op.create_index(
-        "ix_patients_correlation_hash", "patients", ["correlation_hash"], unique=False
-    )
-    op.create_index(
-        "ix_patients_soft_deleted_at", "patients", ["soft_deleted_at"], unique=False
-    )
-    op.create_index(
-        "ix_patients_anonymized_at", "patients", ["anonymized_at"], unique=False
-    )
+    op.create_index("ix_patients_correlation_hash", "patients", ["correlation_hash"], unique=False)
+    op.create_index("ix_patients_soft_deleted_at", "patients", ["soft_deleted_at"], unique=False)
+    op.create_index("ix_patients_anonymized_at", "patients", ["anonymized_at"], unique=False)
     op.create_index("ix_patients_deleted_at", "patients", ["deleted_at"], unique=False)
