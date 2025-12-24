@@ -1,4 +1,9 @@
-# Commande: Implémenter Phases 2-3 - Amélioration Gestion Suppression Professionnels
+---
+name: implement-professional-deletion-phases-2-3
+description: Implémenter les Phases 2-3 du feature suppression professionnels avec TDD. Soft delete, anonymisation différée, détection retours, API admin.
+---
+
+# Implémenter Phases 2-3 - Amélioration Gestion Suppression Professionnels
 
 ## Contexte
 
