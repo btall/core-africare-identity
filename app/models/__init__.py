@@ -1,31 +1,35 @@
 # Modèles SQLAlchemy pour core-africare-identity
 #
-# Architecture hybride FHIR + PostgreSQL:
+# Architecture hybride FHIR + PostgreSQL (depuis migration d5be1f5f6b77):
 # - Données démographiques: HAPI FHIR (Patient/Practitioner resources)
 # - Métadonnées GDPR: PostgreSQL (patient_gdpr_metadata, professional_gdpr_metadata)
 #
-# Les modèles Patient et Professional sont OBSOLÈTES.
-# Les tables correspondantes ont été supprimées par la migration d5be1f5f6b77.
-# Ces modèles sont conservés temporairement pour compatibilité avec:
-# - app/api/v1/endpoints/admin_patients.py
-# - app/api/v1/endpoints/admin_professionals.py
-# - app/services/anonymization_scheduler.py
-# - app/services/patient_anonymization_scheduler.py
-# - app/services/statistics_service.py
+# MODÈLES ACTIFS:
+# - PatientGdprMetadata: Métadonnées RGPD locales pour patients
+# - ProfessionalGdprMetadata: Métadonnées RGPD locales pour professionnels
 #
-# TODO: Migrer ces fichiers vers l'architecture FHIR + GDPR metadata
+# MODÈLES OBSOLÈTES (tables supprimées):
+# Patient et Professional sont conservés UNIQUEMENT pour:
+# - scripts/migrate_to_fhir.py (migration de données historiques)
+# - app/services/keycloak_sync_service.py (fonctions legacy _soft_delete, _anonymize)
+# - Tests unitaires non migrés (marqués @pytest.mark.skip)
+#
+# Ces fichiers seront supprimés une fois que:
+# 1. keycloak_sync_service.py n'utilise plus les modèles legacy
+# 2. Les tests sont migrés vers PatientGdprMetadata/ProfessionalGdprMetadata
+# 3. La migration de données historiques est terminée
 
 # Modèles actifs (FHIR hybrid architecture)
 from .gdpr_metadata import PatientGdprMetadata, ProfessionalGdprMetadata
 
-# Modèles obsolètes (tables supprimées - migration d5be1f5f6b77)
-# Conservés uniquement pour compatibilité avec admin_patients.py et schedulers
+# Modèles obsolètes - NE PAS UTILISER dans nouveau code
+# Tables supprimées par migration d5be1f5f6b77
 from .patient import Patient
 from .professional import Professional
 
 __all__ = [
-    "Patient",  # OBSOLÈTE - table supprimée, conservé pour compatibilité
+    "Patient",  # OBSOLÈTE - conservé pour migration/tests legacy
     "PatientGdprMetadata",
-    "Professional",  # OBSOLÈTE - table supprimée, conservé pour compatibilité
+    "Professional",  # OBSOLÈTE - conservé pour migration/tests legacy
     "ProfessionalGdprMetadata",
 ]
