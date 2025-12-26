@@ -28,6 +28,7 @@ IS_GITHUB_ACTIONS = os.getenv("GITHUB_ACTIONS") == "true"
 TEST_PORTS = {
     "postgres": 5432 if IS_GITHUB_ACTIONS else 5433,
     "redis": 6379 if IS_GITHUB_ACTIONS else 6380,
+    "hapi_fhir": 8090 if IS_GITHUB_ACTIONS else 8081,
 }
 
 # Variables d'environnement pour les tests
@@ -38,6 +39,10 @@ TEST_ENV = {
         f"postgresql+asyncpg://core-africare-identity_test:test_password@localhost:{TEST_PORTS['postgres']}/core-africare-identity_test",
     ),
     "REDIS_URL": os.getenv("REDIS_URL", f"redis://localhost:{TEST_PORTS['redis']}/0"),
+    "HAPI_FHIR_BASE_URL": os.getenv(
+        "HAPI_FHIR_BASE_URL",
+        f"http://localhost:{TEST_PORTS['hapi_fhir']}/fhir",
+    ),
     "ENVIRONMENT": os.getenv("ENVIRONMENT", "development"),  # Changed from "test" to "development"
     "DEBUG": os.getenv("DEBUG", "false"),
     # Keycloak (test mode)
@@ -183,3 +188,64 @@ def test_env():
 def test_ports():
     """Fournit les ports de test."""
     return TEST_PORTS.copy()
+
+
+# ============================================================================
+# Fixtures HAPI FHIR
+# ============================================================================
+
+
+@pytest.fixture(scope="function")
+async def test_fhir_client():
+    """
+    Initialise le client FHIR singleton pour les tests.
+
+    Utilise HAPI FHIR sur le port 8081 (docker-compose.test.yaml).
+    Cette fixture initialise le singleton et le nettoie après le test.
+    Inclut des retries car HAPI FHIR peut prendre ~30s au démarrage.
+    """
+    import httpx
+
+    from app.infrastructure.fhir.client import (
+        close_fhir_client,
+        initialize_fhir_client,
+    )
+
+    # Attendre que HAPI FHIR soit prêt (retries)
+    base_url = TEST_ENV["HAPI_FHIR_BASE_URL"]
+    max_retries = 30
+    retry_delay = 2
+
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient() as http_client:
+                response = await http_client.get(f"{base_url}/metadata", timeout=5.0)
+                if response.status_code == 200:
+                    break
+        except Exception:
+            pass
+        if attempt < max_retries - 1:
+            await asyncio.sleep(retry_delay)
+    else:
+        pytest.skip(f"HAPI FHIR non disponible après {max_retries * retry_delay}s")
+
+    # Initialiser le client FHIR singleton
+    client = await initialize_fhir_client(
+        base_url=base_url,
+        timeout=30,
+    )
+
+    yield client
+
+    # Fermer le client après le test
+    await close_fhir_client()
+
+
+@pytest.fixture
+async def fhir_client(test_fhir_client):
+    """
+    Fournit le client FHIR singleton pour chaque test.
+
+    Le client est initialisé une fois par test pour isolation.
+    """
+    yield test_fhir_client

@@ -47,7 +47,7 @@ async def create_professional(
         created_professional = await professional_service.create_professional(
             db=db,
             professional_data=professional,
-            current_user_id=current_user.sub,
+            current_user_id=current_user.user_id,
         )
         return ProfessionalResponse.model_validate(created_professional)
     except IntegrityError as e:
@@ -218,7 +218,7 @@ async def update_professional(
         db=db,
         professional_id=professional_id,
         professional_data=professional_update,
-        current_user_id=current_user.sub,
+        current_user_id=current_user.user_id,
     )
 
     return ProfessionalResponse.model_validate(updated_professional)
@@ -244,7 +244,7 @@ async def delete_professional(
     deleted = await professional_service.delete_professional(
         db=db,
         professional_id=professional_id,
-        current_user_id=current_user.sub,
+        current_user_id=current_user.user_id,
     )
 
     if not deleted:
@@ -330,7 +330,7 @@ async def verify_professional(
     verified_professional = await professional_service.verify_professional(
         db=db,
         professional_id=professional_id,
-        current_user_id=current_user.sub,
+        current_user_id=current_user.user_id,
     )
 
     if not verified_professional:
@@ -339,7 +339,7 @@ async def verify_professional(
             detail=f"Professionnel avec ID {professional_id} non trouvé",
         )
 
-    return ProfessionalResponse.model_validate(verified_professional)
+    return verified_professional
 
 
 @router.post(
@@ -387,7 +387,13 @@ async def toggle_availability(
         db=db,
         professional_id=professional_id,
         is_available=is_available,
-        current_user_id=current_user.sub,
+        current_user_id=current_user.user_id,
     )
 
-    return ProfessionalResponse.model_validate(updated_professional)
+    if not updated_professional:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Professionnel avec ID {professional_id} non trouvé",
+        )
+
+    return updated_professional

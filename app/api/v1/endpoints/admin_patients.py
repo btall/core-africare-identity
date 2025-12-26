@@ -4,6 +4,10 @@ Ce module fournit des endpoints réservés aux administrateurs pour:
 - Marquer/retirer statut d'enquête (blocage suppression)
 - Restaurer patients soft deleted (pendant période de grâce)
 - Lister patients en attente d'anonymisation
+
+Architecture hybride FHIR + PostgreSQL:
+- PatientGdprMetadata: métadonnées GDPR locales (enquête, soft delete, anonymisation)
+- HAPI FHIR: données démographiques (email, nom, etc.)
 """
 
 import logging
@@ -16,7 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_session
 from app.core.events import publish
 from app.core.exceptions import PatientDeletionBlockedError
-from app.models.patient import Patient
+from app.infrastructure.fhir.client import get_fhir_client
+from app.infrastructure.fhir.mappers.patient_mapper import PatientMapper
+from app.models.gdpr_metadata import PatientGdprMetadata
 from app.schemas.patient import (
     PatientAnonymizationStatus,
     PatientDeletionContext,
@@ -26,12 +32,33 @@ from app.schemas.patient import (
 )
 from app.services.keycloak_sync_service import (
     _generate_patient_correlation_hash,
-    _soft_delete,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _extract_email_from_fhir(fhir_patient) -> str | None:
+    """Extrait l'email depuis une ressource FHIR Patient."""
+    if not fhir_patient.telecom:
+        return None
+    for telecom in fhir_patient.telecom:
+        if telecom.system == "email":
+            return telecom.value
+    return None
+
+
+def _extract_national_id_from_fhir(fhir_patient) -> str | None:
+    """Extrait le national_id depuis une ressource FHIR Patient."""
+    from app.infrastructure.fhir.identifiers import NATIONAL_ID_SYSTEM
+
+    if not fhir_patient.identifier:
+        return None
+    for identifier in fhir_patient.identifier:
+        if identifier.system == NATIONAL_ID_SYSTEM:
+            return identifier.value
+    return None
 
 
 @router.post("/{patient_id}/investigation", response_model=PatientResponse)
@@ -56,36 +83,46 @@ async def mark_patient_under_investigation(
     Raises:
         HTTPException 404: Patient non trouvé
     """
-    # Récupérer patient
-    patient = await db.get(Patient, patient_id)
-    if not patient:
+    fhir_client = get_fhir_client()
+
+    # Récupérer métadonnées GDPR
+    gdpr = await db.get(PatientGdprMetadata, patient_id)
+    if not gdpr:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Patient {patient_id} not found",
         )
 
-    # Marquer sous enquête
-    patient.under_investigation = True
-    patient.investigation_notes = context.reason or "Enquête en cours"
-    patient.updated_at = datetime.now(UTC)
+    # Marquer sous enquête (opération locale uniquement)
+    gdpr.under_investigation = True
+    gdpr.investigation_notes = context.reason or "Enquête en cours"
+    gdpr.updated_at = datetime.now(UTC)
 
     await db.commit()
-    await db.refresh(patient)
+    await db.refresh(gdpr)
 
     # Publier événement
     await publish(
         "identity.patient.investigation_started",
         {
-            "patient_id": patient.id,
-            "keycloak_user_id": patient.keycloak_user_id,
-            "investigation_notes": patient.investigation_notes,
+            "patient_id": gdpr.id,
+            "keycloak_user_id": gdpr.keycloak_user_id,
+            "investigation_notes": gdpr.investigation_notes,
             "marked_at": datetime.now(UTC).isoformat(),
         },
     )
 
-    logger.info(f"Patient {patient_id} marqué sous enquête: {patient.investigation_notes}")
+    logger.info(f"Patient {patient_id} marqué sous enquête: {gdpr.investigation_notes}")
 
-    return PatientResponse.model_validate(patient)
+    # Récupérer données FHIR pour réponse complète
+    fhir_patient = await fhir_client.read("Patient", gdpr.fhir_resource_id)
+    if not fhir_patient:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Patient FHIR resource {gdpr.fhir_resource_id} not found",
+        )
+
+    return PatientMapper.from_fhir(fhir_patient, gdpr.id, gdpr.to_dict())
 
 
 @router.delete("/{patient_id}/investigation", response_model=PatientResponse)
@@ -108,35 +145,45 @@ async def remove_investigation_status(
     Raises:
         HTTPException 404: Patient non trouvé
     """
-    # Récupérer patient
-    patient = await db.get(Patient, patient_id)
-    if not patient:
+    fhir_client = get_fhir_client()
+
+    # Récupérer métadonnées GDPR
+    gdpr = await db.get(PatientGdprMetadata, patient_id)
+    if not gdpr:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Patient {patient_id} not found",
         )
 
-    # Retirer enquête
-    patient.under_investigation = False
-    patient.investigation_notes = None
-    patient.updated_at = datetime.now(UTC)
+    # Retirer enquête (opération locale uniquement)
+    gdpr.under_investigation = False
+    gdpr.investigation_notes = None
+    gdpr.updated_at = datetime.now(UTC)
 
     await db.commit()
-    await db.refresh(patient)
+    await db.refresh(gdpr)
 
     # Publier événement
     await publish(
         "identity.patient.investigation_cleared",
         {
-            "patient_id": patient.id,
-            "keycloak_user_id": patient.keycloak_user_id,
+            "patient_id": gdpr.id,
+            "keycloak_user_id": gdpr.keycloak_user_id,
             "cleared_at": datetime.now(UTC).isoformat(),
         },
     )
 
     logger.info(f"Patient {patient_id} enquête retirée")
 
-    return PatientResponse.model_validate(patient)
+    # Récupérer données FHIR pour réponse complète
+    fhir_patient = await fhir_client.read("Patient", gdpr.fhir_resource_id)
+    if not fhir_patient:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Patient FHIR resource {gdpr.fhir_resource_id} not found",
+        )
+
+    return PatientMapper.from_fhir(fhir_patient, gdpr.id, gdpr.to_dict())
 
 
 @router.delete("/{patient_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -162,8 +209,9 @@ async def delete_patient_admin(
     1. Soft delete avec remplissage de soft_deleted_at
     2. Génération du correlation_hash pour détection retour utilisateur
     3. Démarrage période de grâce de 7 jours
-    4. Publication événement identity.patient.soft_deleted
-    5. Anonymisation automatique après 7 jours (via scheduler)
+    4. Désactivation ressource FHIR (active=false)
+    5. Publication événement identity.patient.soft_deleted
+    6. Anonymisation automatique après 7 jours (via scheduler)
 
     Args:
         patient_id: ID du patient à supprimer
@@ -184,54 +232,74 @@ async def delete_patient_admin(
         DELETE /api/v1/admin/patients/123
         Body: {"deletion_reason": "user_request", "notes": "Demande du patient"}
     """
-    # Récupérer patient
-    patient = await db.get(Patient, patient_id)
-    if not patient:
+    fhir_client = get_fhir_client()
+
+    # Récupérer métadonnées GDPR
+    gdpr = await db.get(PatientGdprMetadata, patient_id)
+    if not gdpr:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Patient {patient_id} not found",
         )
 
     # Vérifier si déjà soft deleted
-    if patient.soft_deleted_at:
+    if gdpr.soft_deleted_at:
         logger.warning(f"Patient {patient_id} déjà soft deleted")
         return  # Idempotent
 
-    try:
-        # Générer correlation_hash AVANT soft delete
-        if not patient.correlation_hash and patient.email:
-            patient.correlation_hash = _generate_patient_correlation_hash(
-                email=patient.email,
-                national_id=patient.national_id,
-            )
-
-        # Stocker deletion_reason
-        patient.deletion_reason = deletion_request.deletion_reason
-
-        # Créer un événement fictif pour _soft_delete (utilise même interface que webhook)
-        class MockEvent:
-            def __init__(self, reason, override):
-                self.user_id = patient.keycloak_user_id
-                self.deletion_reason = reason
-                self.investigation_check_override = override
-
-        mock_event = MockEvent(
-            deletion_request.deletion_reason,
-            deletion_request.investigation_check_override,
+    # Vérifier si sous enquête (sauf si override)
+    if gdpr.under_investigation and not deletion_request.investigation_check_override:
+        raise PatientDeletionBlockedError(
+            patient_id=patient_id,
+            keycloak_user_id=gdpr.keycloak_user_id,
+            investigation_notes=gdpr.investigation_notes,
         )
 
-        # Appeler _soft_delete (gère under_investigation check, soft_deleted_at, événement)
-        await _soft_delete(patient, mock_event)
-
-        await db.commit()
-
-        logger.info(
-            f"Patient {patient_id} soft deleted (raison: {deletion_request.deletion_reason})"
+    # Récupérer données FHIR pour email (nécessaire pour correlation_hash)
+    fhir_patient = await fhir_client.read("Patient", gdpr.fhir_resource_id)
+    if not fhir_patient:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Patient FHIR resource {gdpr.fhir_resource_id} not found",
         )
 
-    except PatientDeletionBlockedError:
-        # Re-raise l'exception RFC 9457 telle quelle
-        raise
+    # Extraire email et national_id depuis FHIR
+    email = _extract_email_from_fhir(fhir_patient)
+    national_id = _extract_national_id_from_fhir(fhir_patient)
+
+    # Générer correlation_hash AVANT soft delete (pour détection retour utilisateur)
+    if not gdpr.correlation_hash and email:
+        gdpr.correlation_hash = _generate_patient_correlation_hash(
+            email=email,
+            national_id=national_id,
+        )
+
+    # Marquer comme soft deleted (métadonnées GDPR locales)
+    gdpr.soft_deleted_at = datetime.now(UTC)
+    gdpr.deletion_reason = deletion_request.deletion_reason
+    gdpr.updated_at = datetime.now(UTC)
+
+    # Désactiver dans FHIR
+    fhir_patient.active = False
+    await fhir_client.update(fhir_patient)
+
+    await db.commit()
+
+    # Publier événement
+    await publish(
+        "identity.patient.soft_deleted",
+        {
+            "patient_id": gdpr.id,
+            "keycloak_user_id": gdpr.keycloak_user_id,
+            "fhir_resource_id": gdpr.fhir_resource_id,
+            "deletion_reason": deletion_request.deletion_reason,
+            "soft_deleted_at": gdpr.soft_deleted_at.isoformat(),
+            "grace_period_days": 7,
+            "timestamp": datetime.now(UTC).isoformat(),
+        },
+    )
+
+    logger.info(f"Patient {patient_id} soft deleted (raison: {deletion_request.deletion_reason})")
 
 
 @router.post("/{patient_id}/restore", response_model=PatientResponse)
@@ -257,16 +325,18 @@ async def restore_soft_deleted_patient(
         HTTPException 404: Patient non trouvé
         HTTPException 422: Déjà anonymisé (impossible de restaurer)
     """
-    # Récupérer patient
-    patient = await db.get(Patient, patient_id)
-    if not patient:
+    fhir_client = get_fhir_client()
+
+    # Récupérer métadonnées GDPR
+    gdpr = await db.get(PatientGdprMetadata, patient_id)
+    if not gdpr:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Patient {patient_id} not found",
         )
 
     # Vérifier si anonymisé
-    if patient.anonymized_at:
+    if gdpr.anonymized_at:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=(
@@ -275,21 +345,33 @@ async def restore_soft_deleted_patient(
             ),
         )
 
-    # Restaurer
-    patient.is_active = True
-    patient.soft_deleted_at = None
-    patient.deletion_reason = None
-    patient.updated_at = datetime.now(UTC)
+    # Récupérer ressource FHIR
+    fhir_patient = await fhir_client.read("Patient", gdpr.fhir_resource_id)
+    if not fhir_patient:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Patient FHIR resource {gdpr.fhir_resource_id} not found",
+        )
+
+    # Restaurer métadonnées GDPR locales
+    gdpr.soft_deleted_at = None
+    gdpr.deletion_reason = None
+    gdpr.updated_at = datetime.now(UTC)
+
+    # Réactiver dans FHIR
+    fhir_patient.active = True
+    await fhir_client.update(fhir_patient)
 
     await db.commit()
-    await db.refresh(patient)
+    await db.refresh(gdpr)
 
     # Publier événement
     await publish(
         "identity.patient.restored",
         {
-            "patient_id": patient.id,
-            "keycloak_user_id": patient.keycloak_user_id,
+            "patient_id": gdpr.id,
+            "keycloak_user_id": gdpr.keycloak_user_id,
+            "fhir_resource_id": gdpr.fhir_resource_id,
             "restore_reason": restore_request.restore_reason,
             "restored_at": datetime.now(UTC).isoformat(),
         },
@@ -297,7 +379,7 @@ async def restore_soft_deleted_patient(
 
     logger.info(f"Patient {patient_id} restauré: {restore_request.restore_reason}")
 
-    return PatientResponse.model_validate(patient)
+    return PatientMapper.from_fhir(fhir_patient, gdpr.id, gdpr.to_dict())
 
 
 @router.get("/deleted", response_model=list[PatientAnonymizationStatus])
@@ -315,25 +397,37 @@ async def list_soft_deleted_patients(
     Returns:
         Liste des patients soft deleted avec statut anonymisation
     """
-    # Récupérer soft deleted (pas anonymisés)
+    fhir_client = get_fhir_client()
+
+    # Récupérer métadonnées GDPR soft deleted (pas encore anonymisés)
     result = await db.execute(
-        select(Patient).where(
-            Patient.soft_deleted_at.isnot(None),
-            Patient.anonymized_at.is_(None),
+        select(PatientGdprMetadata).where(
+            PatientGdprMetadata.soft_deleted_at.isnot(None),
+            PatientGdprMetadata.anonymized_at.is_(None),
         )
     )
-    patients = result.scalars().all()
+    gdpr_records = result.scalars().all()
 
-    # Convertir en PatientAnonymizationStatus
+    # Convertir en PatientAnonymizationStatus (avec fetch FHIR pour email)
     statuses = []
-    for patient in patients:
+    for gdpr in gdpr_records:
+        # Récupérer email depuis FHIR (peut être None si ressource non trouvée)
+        email = None
+        try:
+            fhir_patient = await fhir_client.read("Patient", gdpr.fhir_resource_id)
+            if fhir_patient:
+                email = _extract_email_from_fhir(fhir_patient)
+        except Exception:
+            # Si FHIR non disponible, continuer sans email
+            logger.warning(f"Cannot fetch FHIR patient {gdpr.fhir_resource_id}")
+
         status_obj = PatientAnonymizationStatus(
-            patient_id=patient.id,
-            keycloak_user_id=patient.keycloak_user_id,
-            email=patient.email,
-            soft_deleted_at=patient.soft_deleted_at,
-            anonymized_at=patient.anonymized_at,
-            deletion_reason=patient.deletion_reason,
+            patient_id=gdpr.id,
+            keycloak_user_id=gdpr.keycloak_user_id,
+            email=email,
+            soft_deleted_at=gdpr.soft_deleted_at,
+            anonymized_at=gdpr.anonymized_at,
+            deletion_reason=gdpr.deletion_reason,
         )
         statuses.append(status_obj)
 

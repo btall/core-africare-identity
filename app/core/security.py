@@ -24,13 +24,29 @@ security_scheme = HTTPBearer()
 
 
 class User(BaseModel):
-    sub: str  # Keycloak user ID
+    sub: str | None = None  # Keycloak user ID (may be missing in some token flows)
     email: str | None = None
     preferred_username: str | None = None
     given_name: str | None = None
     family_name: str | None = None
     realm_access: dict | None = None
     resource_access: dict | None = None
+    sid: str | None = None  # Session ID (fallback identifier)
+    jti: str | None = None  # JWT ID (fallback identifier)
+
+    @property
+    def user_id(self) -> str:
+        """Get the user identifier from sub, sid, or jti."""
+        if self.sub:
+            return self.sub
+        if self.sid:
+            return self.sid
+        if self.jti:
+            # jti format can be "onrtro:uuid" - extract the uuid part
+            if ":" in self.jti:
+                return self.jti.split(":")[-1]
+            return self.jti
+        raise ValueError("No user identifier found in token")
 
     @property
     def is_admin(self) -> bool:
@@ -41,7 +57,10 @@ class User(BaseModel):
 
     def is_owner(self, resource_owner_id: str) -> bool:
         """Check si l'utilisateur est le propriétaire de la ressource."""
-        return self.sub == resource_owner_id
+        try:
+            return self.user_id == resource_owner_id
+        except ValueError:
+            return False
 
     def verify_access(self, resource_owner_id: str) -> dict:
         """
@@ -68,10 +87,10 @@ class User(BaseModel):
                    Les noms/emails/usernames sont exclus des logs d'audit.
         """
         if self.is_owner(resource_owner_id):
-            return {"access_reason": "owner", "accessed_by": self.sub}
+            return {"access_reason": "owner", "accessed_by": self.user_id}
 
         if self.is_admin:
-            return {"access_reason": "admin_supervision", "accessed_by": self.sub}
+            return {"access_reason": "admin_supervision", "accessed_by": self.user_id}
 
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -230,9 +249,10 @@ async def get_current_user(token_data: Annotated[dict, Depends(get_token_data)])
     with tracer.start_as_current_span("get_current_user") as span:
         try:
             user = User(**token_data)
-            span.set_attribute("auth.user_id", user.sub)
+            user_id = user.user_id  # This will raise if no identifier found
+            span.set_attribute("auth.user_id", user_id)
             span.set_attribute("auth.username", user.preferred_username or "unknown")
-            logger.info(f"User authenticated: {user.sub}")
+            logger.info(f"User authenticated: {user_id}")
             return user
         except Exception as e:
             logger.error(f"Failed to create user from token data: {e}")

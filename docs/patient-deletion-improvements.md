@@ -1,5 +1,15 @@
 # Améliorations Gestion Suppression Patients
 
+> **Note Architecture FHIR (Décembre 2025)**
+>
+> Ce document a été écrit avant la migration vers l'architecture hybride FHIR.
+> Avec la nouvelle architecture:
+> - Les données démographiques (first_name, last_name, email, phone) sont stockées dans **HAPI FHIR**
+> - Les métadonnées GDPR (soft_deleted_at, anonymized_at, under_investigation, correlation_hash) sont dans **PostgreSQL** via la table `patient_gdpr_metadata`
+> - Le workflow de suppression reste identique, seule la localisation des données change
+>
+> Voir `docs/fhir-architecture.md` pour l'architecture actuelle.
+
 ## Vue d'ensemble
 
 Ce document décrit l'implémentation complète du système de gestion avancée de suppression pour les **patients** dans le service `core-africare-identity`. Cette implémentation réplique exactement les fonctionnalités développées pour les **professionnels** (PR #4) afin d'assurer la **parité fonctionnelle** et la **cohérence RGPD** à travers tout le système AfriCare Identity.

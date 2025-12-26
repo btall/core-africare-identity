@@ -44,8 +44,27 @@ services:
     networks:
       - test-network
 
+  # HAPI FHIR R4 pour tests (port 8081 au lieu de 8080)
+  # Note: Image distroless sans curl/wget, healthcheck désactivé
+  # Les fixtures pytest gèrent les retries de connexion
+  hapi-fhir-test:
+    image: hapiproject/hapi:latest
+    container_name: core-africare-identity-hapi-fhir-test
+    environment:
+      - hapi.fhir.default_encoding=json
+      - hapi.fhir.fhir_version=R4
+      - hapi.fhir.allow_multiple_delete=true
+      - hapi.fhir.server_address=http://localhost:8081/fhir
+      # Désactiver la validation stricte pour les tests
+      - hapi.fhir.validation.enabled=false
+    ports:
+      - "8081:8080"
+    networks:
+      - test-network
+
   # Service de test wait-for-services
-  # Attend que tous les services soient prêts avant de commencer les tests
+  # Attend que PostgreSQL et Redis soient prêts
+  # HAPI FHIR prend ~30s pour démarrer, les fixtures pytest gèrent les retries
   wait-for-services:
     image: alpine:latest
     container_name: core-africare-identity-wait-for-services
@@ -54,15 +73,19 @@ services:
         condition: service_healthy
       redis-test:
         condition: service_healthy
+      hapi-fhir-test:
+        condition: service_started
     command: >
       sh -c "
-        echo '✅ Tous les services de test sont prêts!';
+        echo '✅ Services de base prêts (PostgreSQL, Redis)';
+        echo '⏳ HAPI FHIR démarre en arrière-plan (~30s)';
         echo '📊 Services disponibles:';
         echo '   - PostgreSQL: localhost:5433';
         echo '   - Redis: localhost:6380';
+        echo '   - HAPI FHIR: localhost:8081/fhir (patientez ~30s)';
         echo '';
-        echo '🧪 Vous pouvez maintenant lancer les tests:';
-        echo '   make test';
+        echo '🧪 Pour lancer les tests:';
+        echo '   make test (attendra HAPI FHIR automatiquement)';
       "
     networks:
       - test-network

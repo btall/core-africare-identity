@@ -87,6 +87,19 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      # HAPI FHIR R4 pour tests d'intégration
+      # Port 8090 pour éviter conflit avec Keycloak (8080)
+      # Note: Image distroless, pas de healthcheck basé sur curl
+      hapi-fhir:
+        image: hapiproject/hapi:latest
+        env:
+          hapi.fhir.default_encoding: json
+          hapi.fhir.fhir_version: R4
+          hapi.fhir.allow_multiple_delete: "true"
+          hapi.fhir.validation.enabled: "false"
+        ports:
+          - 8090:8080
+
     steps:
       - name: Checkout du code
         uses: actions/checkout@v4
@@ -127,6 +140,8 @@ jobs:
           SQLALCHEMY_DATABASE_URI: postgresql+asyncpg://core-africare-identity_test:test_password@localhost:5432/core-africare-identity_test
           # Redis (test)
           REDIS_URL: redis://localhost:6379/0
+          # HAPI FHIR (test)
+          HAPI_FHIR_BASE_URL: http://localhost:8090/fhir
           # Keycloak (mock pour tests)
           KEYCLOAK_SERVER_URL: http://localhost:8080
           KEYCLOAK_REALM: test

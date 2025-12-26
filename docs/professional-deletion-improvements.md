@@ -1,5 +1,15 @@
 # Amélioration Gestion Suppression Professionnels
 
+> **Note Architecture FHIR (Décembre 2025)**
+>
+> Ce document a été écrit avant la migration vers l'architecture hybride FHIR.
+> Avec la nouvelle architecture:
+> - Les données démographiques sont stockées dans **HAPI FHIR** (Practitioner)
+> - Les métadonnées GDPR sont dans **PostgreSQL** via la table `professional_gdpr_metadata`
+> - Le workflow de suppression reste identique
+>
+> Voir `docs/fhir-architecture.md` pour l'architecture actuelle.
+
 ## Statut : ✅ COMPLÉTÉ (Phases 1-3 implémentées)
 
 Cette feature améliore la gestion de suppression des professionnels de santé avec :

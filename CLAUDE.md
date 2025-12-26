@@ -89,12 +89,21 @@ core-africare-identity/
 │   │   ├── database.py      # SQLAlchemy 2.0 async setup
 │   │   ├── events.py        # Redis Pub/Sub messaging (Phase 1 MVP)
 │   │   └── security.py      # JWT auth and security utilities
+│   ├── infrastructure/      # External service integrations
+│   │   └── fhir/            # HAPI FHIR integration
+│   │       ├── client.py    # Async HTTP client
+│   │       ├── config.py    # FHIR settings
+│   │       ├── identifiers.py  # FHIR identifier systems
+│   │       ├── exceptions.py   # FHIR error types
+│   │       └── mappers/     # Pydantic <-> FHIR mappers
+│   │           ├── patient_mapper.py
+│   │           └── professional_mapper.py
 │   ├── api/
 │   │   └── v1/              # API version 1 routes
 │   │       ├── api.py       # Main router aggregation
 │   │       ├── endpoints/   # Individual endpoint modules
 │   │       └── health.py    # Health check endpoint
-│   ├── models/              # SQLAlchemy 2.0 database tables
+│   ├── models/              # SQLAlchemy 2.0 database tables (GDPR metadata)
 │   ├── schemas/             # Pydantic request/response models
 │   └── services/            # Business logic and event handlers
 │       └── event_service.py # Event handlers with @subscribe decorators
@@ -102,6 +111,7 @@ core-africare-identity/
 ├── docs/                    # Service-specific documentation
 │   ├── database.md          # Database setup and usage
 │   ├── events.md            # Event system documentation
+│   ├── fhir-architecture.md # FHIR hybrid architecture
 │   └── testing.md           # Testing infrastructure and patterns
 ├── tests/                   # Test suite
 │   ├── integration/         # Tests d'intégration (PostgreSQL + Redis réels)
@@ -129,6 +139,72 @@ core-africare-identity/
 - **Ruff**: Code linting and formatting
 - **pytest**: Testing framework with async support + integration tests
 - **Docker Compose**: Services de développement et de test isolés
+- **HAPI FHIR**: Source of truth for Patient/Practitioner demographics
+- **fhir-resources**: FHIR R4 resource models (Pydantic v2)
+- **httpx**: Async HTTP client for FHIR operations
+
+## FHIR Hybrid Architecture
+
+Le service utilise une **architecture hybride FHIR** où:
+- **HAPI FHIR** stocke les données démographiques (Patient, Practitioner)
+- **PostgreSQL** stocke les métadonnées GDPR locales
+
+### Composants FHIR
+
+```
+app/infrastructure/fhir/
+├── __init__.py
+├── client.py           # Client HTTP async (httpx + retry)
+├── config.py           # Configuration FHIR
+├── identifiers.py      # Systèmes d'identifiants FHIR
+├── exceptions.py       # Exceptions FHIR typées
+└── mappers/
+    ├── __init__.py
+    ├── patient_mapper.py       # PatientCreate <-> FHIR Patient
+    └── professional_mapper.py  # ProfessionalCreate <-> FHIR Practitioner
+```
+
+### Modèles GDPR Locaux
+
+```python
+# app/models/gdpr_metadata.py
+class PatientGdprMetadata(Base):
+    id: Mapped[int]                    # ID numérique (rétro-compat API)
+    fhir_resource_id: Mapped[str]      # UUID FHIR Patient
+    keycloak_user_id: Mapped[str]      # Lookup rapide
+    is_verified: Mapped[bool]
+    under_investigation: Mapped[bool]  # Blocage suppression
+    soft_deleted_at: Mapped[datetime]  # Période de grâce 7j
+    anonymized_at: Mapped[datetime]    # Anonymisation définitive
+    correlation_hash: Mapped[str]      # Détection retour
+
+class ProfessionalGdprMetadata(Base):
+    # Mêmes champs + is_available, digital_signature
+```
+
+### Pattern d'Orchestration
+
+```python
+async def create_patient(db, fhir_client, patient_data, current_user_id):
+    # 1. Mapper vers FHIR
+    fhir_patient = PatientMapper.to_fhir(patient_data)
+    # 2. Créer dans HAPI FHIR
+    created_fhir = await fhir_client.create(fhir_patient)
+    # 3. Créer métadonnées GDPR locales
+    gdpr = PatientGdprMetadata(fhir_resource_id=created_fhir.id, ...)
+    db.add(gdpr)
+    await db.commit()
+    # 4. Retourner avec ID numérique local
+    return PatientMapper.from_fhir(created_fhir, local_id=gdpr.id, ...)
+```
+
+### Rétro-compatibilité API
+
+- Mêmes schémas Pydantic (PatientResponse, ProfessionalResponse)
+- Mêmes IDs numériques dans les réponses
+- Mêmes endpoints sans modification
+
+Voir `docs/fhir-architecture.md` pour plus de détails.
 
 ## Event System
 
@@ -287,6 +363,10 @@ KEYCLOAK_SERVER_URL=https://keycloak.africare.app/auth
 KEYCLOAK_REALM=africare
 KEYCLOAK_CLIENT_ID=core-africare-identity
 KEYCLOAK_CLIENT_SECRET=cYRi-B9OO2Ufd1h1n1SduA
+
+# HAPI FHIR Server (source of truth for demographics)
+HAPI_FHIR_BASE_URL=http://localhost:8080/fhir
+HAPI_FHIR_TIMEOUT=30
 
 # OpenTelemetry
 OTEL_EXPORTER_OTLP_ENDPOINT=http://grafana-otel:4317
