@@ -45,7 +45,7 @@ async def create_patient(
         created_patient = await patient_service.create_patient(
             db=db,
             patient_data=patient,
-            current_user_id=current_user.sub,
+            current_user_id=current_user.user_id,
         )
         return PatientResponse.model_validate(created_patient)
     except IntegrityError as e:
@@ -183,7 +183,7 @@ async def update_patient(
         db=db,
         patient_id=patient_id,
         patient_data=patient_update,
-        current_user_id=current_user.sub,
+        current_user_id=current_user.user_id,
     )
 
     return PatientResponse.model_validate(updated_patient)
@@ -209,7 +209,7 @@ async def delete_patient(
     deleted = await patient_service.delete_patient(
         db=db,
         patient_id=patient_id,
-        current_user_id=current_user.sub,
+        current_user_id=current_user.user_id,
     )
 
     if not deleted:
@@ -294,7 +294,7 @@ async def verify_patient(
     verified_patient = await patient_service.verify_patient(
         db=db,
         patient_id=patient_id,
-        current_user_id=current_user.sub,
+        current_user_id=current_user.user_id,
     )
 
     if not verified_patient:

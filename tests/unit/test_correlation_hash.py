@@ -3,7 +3,7 @@
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.professional import Professional
+from app.models.gdpr_metadata import ProfessionalGdprMetadata
 from app.services.keycloak_sync_service import (
     _check_returning_professional,
     _generate_correlation_hash,
@@ -55,30 +55,25 @@ async def test_check_returning_professional_not_found(db_session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_check_returning_professional_found(db_session: AsyncSession):
-    """Test: Détecte un professionnel anonymisé qui revient."""
+    """Test: Détecte un professionnel anonymisé qui revient via GDPR metadata."""
     from datetime import UTC, datetime
 
-    # Créer un professionnel anonymisé avec correlation_hash
+    # Créer les métadonnées GDPR d'un professionnel anonymisé avec correlation_hash
     original_email = "dr.returning@hospital.sn"
     original_professional_id = "CNOM12345"
     correlation_hash = _generate_correlation_hash(original_email, original_professional_id)
 
-    professional = Professional(
+    gdpr_metadata = ProfessionalGdprMetadata(
+        fhir_resource_id="fhir-resource-id-anonymized",
         keycloak_user_id="test-old-keycloak-id",
-        first_name="[ANONYMIZED_HASH_123]",
-        last_name="[ANONYMIZED_HASH_456]",
-        email="[ANONYMIZED_HASH_789]",
-        phone="+221000000000",
-        specialty="Cardiologie",
-        professional_type="physician",
-        title="Dr",
         correlation_hash=correlation_hash,
         anonymized_at=datetime.now(UTC),
-        is_active=False,
+        is_verified=False,
+        is_available=False,
     )
-    db_session.add(professional)
+    db_session.add(gdpr_metadata)
     await db_session.commit()
-    await db_session.refresh(professional)
+    await db_session.refresh(gdpr_metadata)
 
     # Vérifier que la détection fonctionne
     result = await _check_returning_professional(
@@ -86,7 +81,7 @@ async def test_check_returning_professional_found(db_session: AsyncSession):
     )
 
     assert result is not None
-    assert result.id == professional.id
+    assert result.id == gdpr_metadata.id
     assert result.correlation_hash == correlation_hash
     assert result.anonymized_at is not None
 
@@ -98,21 +93,16 @@ async def test_check_returning_professional_ignores_non_anonymized(db_session: A
     professional_id = "CNOM55555"
     correlation_hash = _generate_correlation_hash(email, professional_id)
 
-    # Créer un professionnel actif (non anonymisé)
-    professional = Professional(
+    # Créer métadonnées GDPR d'un professionnel actif (non anonymisé)
+    gdpr_metadata = ProfessionalGdprMetadata(
+        fhir_resource_id="fhir-resource-id-active",
         keycloak_user_id="test-active-keycloak-id",
-        first_name="Dr",
-        last_name="Active",
-        email=email,
-        phone="+221111111111",
-        specialty="Chirurgie",
-        professional_type="physician",
-        title="Dr",
         correlation_hash=correlation_hash,
         anonymized_at=None,  # Pas anonymisé
-        is_active=True,
+        is_verified=True,
+        is_available=True,
     )
-    db_session.add(professional)
+    db_session.add(gdpr_metadata)
     await db_session.commit()
 
     # Ne doit PAS détecter comme "revenant" (non anonymisé)

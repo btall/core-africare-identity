@@ -137,6 +137,10 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379"
     REDIS_DB: int = 0
 
+    # HAPI FHIR Server Configuration
+    HAPI_FHIR_BASE_URL: str = "http://localhost:8080/fhir"
+    HAPI_FHIR_TIMEOUT: int = 30  # Timeout en secondes pour les requêtes FHIR
+
     # Internationalisation (i18n)
     # Liste des langues supportées, ex: ["en", "fr"]
     SUPPORTED_LOCALES: ConfigurableList = ["fr", "en"]

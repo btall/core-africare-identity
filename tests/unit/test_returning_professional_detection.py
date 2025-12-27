@@ -1,58 +1,60 @@
-"""Tests pour la détection des retours de professionnels après anonymisation."""
+"""Tests pour la détection des retours de professionnels après anonymisation.
+
+Ces tests utilisent le vrai client FHIR (HAPI FHIR sur port 8081).
+Seuls Keycloak et les événements Redis sont mockés.
+"""
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from app.models.professional import Professional
+from app.models.gdpr_metadata import ProfessionalGdprMetadata
 from app.schemas.keycloak import KeycloakUser, KeycloakWebhookEvent
 from app.services.keycloak_sync_service import sync_user_registration
 
 
 @pytest.fixture
 def mock_keycloak_and_events():
-    """Mock Keycloak roles and event publishing pour tous les tests."""
+    """Mock Keycloak roles et event publishing."""
     with (
         patch("app.services.keycloak_sync_service.get_user_roles_from_keycloak") as mock_roles,
-        patch("app.services.keycloak_sync_service.publish") as mock_publish,
+        patch("app.services.keycloak_sync_service.publish") as mock_publish_sync,
+        patch("app.services.professional_service.publish") as mock_publish_prof,
     ):
         mock_roles.return_value = ["professional"]
-        mock_publish.return_value = AsyncMock()
-        yield mock_roles, mock_publish
+        # Mock publish pour keycloak_sync_service et professional_service
+        mock_publish_sync.return_value = None
+        mock_publish_prof.return_value = None
+        yield mock_roles, mock_publish_sync
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_detect_returning_professional_after_anonymization(
-    mock_keycloak_and_events, db_session
+    mock_keycloak_and_events, db_session, fhir_client
 ):
-    """Test: détecte un professionnel qui revient après anonymisation."""
-    # SETUP: Créer un professionnel anonymisé avec correlation_hash
+    """Test: détecte un professionnel qui revient après anonymisation via GDPR metadata."""
+    # SETUP: Créer des métadonnées GDPR d'un professionnel anonymisé avec correlation_hash
     from app.services.keycloak_sync_service import _generate_correlation_hash
 
     original_email = "dr.diallo@hospital.sn"
     original_professional_id = None
     correlation_hash = _generate_correlation_hash(original_email, original_professional_id)
 
-    old_professional = Professional(
+    old_gdpr_metadata = ProfessionalGdprMetadata(
+        fhir_resource_id="fhir-old-practitioner",
         keycloak_user_id="old-user-123",
-        first_name="$2b$12$hashedfirstname",  # Anonymisé
-        last_name="$2b$12$hashedlastname",  # Anonymisé
-        email="$2b$12$hashedemail",  # Anonymisé
-        phone="+ANONYMIZED",
-        professional_id=None,  # Supprimé après anonymisation
-        title="Dr",
-        specialty="Cardiologie",
-        professional_type="physician",
-        languages_spoken="fr",
-        is_active=False,
+        is_verified=False,
+        is_available=False,
         soft_deleted_at=datetime.now(UTC),
         anonymized_at=datetime.now(UTC),
         # Hash généré depuis email original + professional_id
         correlation_hash=correlation_hash,
     )
-    db_session.add(old_professional)
+    db_session.add(old_gdpr_metadata)
     await db_session.commit()
+    await db_session.refresh(old_gdpr_metadata)
 
     # ACT: Nouveau professionnel s'enregistre avec même email et professional_id
     event = KeycloakWebhookEvent(
@@ -87,12 +89,15 @@ async def test_detect_returning_professional_after_anonymization(
     # Vérifier les détails de l'événement
     returning_event = returning_user_calls[0][0][1]
     assert returning_event["new_keycloak_user_id"] == "new-user-456"
-    assert returning_event["old_professional_id"] == old_professional.id
-    assert returning_event["correlation_hash"] == old_professional.correlation_hash
+    assert returning_event["old_professional_id"] == old_gdpr_metadata.id
+    assert returning_event["correlation_hash"] == old_gdpr_metadata.correlation_hash
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
-async def test_no_detection_if_no_previous_anonymization(mock_keycloak_and_events, db_session):
+async def test_no_detection_if_no_previous_anonymization(
+    mock_keycloak_and_events, db_session, fhir_client
+):
     """Test: pas de détection si aucun professionnel anonymisé avec ce hash."""
     # ACT: Nouveau professionnel s'enregistre (premier enregistrement)
     event = KeycloakWebhookEvent(
@@ -126,35 +131,29 @@ async def test_no_detection_if_no_previous_anonymization(mock_keycloak_and_event
 
 
 @pytest.mark.skip(reason="TODO: Nécessite extraction professional_id depuis Keycloak attributes")
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_detect_returning_professional_with_professional_id(
-    mock_keycloak_and_events, db_session
+    mock_keycloak_and_events, db_session, fhir_client
 ):
     """Test: détection avec professional_id (CNOM) présent."""
-    # SETUP: Professionnel anonymisé avec correlation_hash basé sur email+professional_id
+    # SETUP: Métadonnées GDPR avec correlation_hash basé sur email+professional_id
     from app.services.keycloak_sync_service import _generate_correlation_hash
 
     original_email = "dr.sow@hospital.sn"
     original_professional_id = "CNOM12345"
     correlation_hash = _generate_correlation_hash(original_email, original_professional_id)
 
-    old_professional = Professional(
+    old_gdpr_metadata = ProfessionalGdprMetadata(
+        fhir_resource_id="fhir-old-practitioner-cnom",
         keycloak_user_id="old-user-cnom",
-        first_name="$2b$12$hashedfirstname",
-        last_name="$2b$12$hashedlastname",
-        email="$2b$12$hashedemail",
-        phone="+ANONYMIZED",
-        professional_id=None,  # Supprimé après anonymisation
-        title="Dr",
-        specialty="Médecine générale",
-        professional_type="physician",
-        languages_spoken="fr",
-        is_active=False,
+        is_verified=False,
+        is_available=False,
         soft_deleted_at=datetime.now(UTC),
         anonymized_at=datetime.now(UTC),
         correlation_hash=correlation_hash,
     )
-    db_session.add(old_professional)
+    db_session.add(old_gdpr_metadata)
     await db_session.commit()
 
     # ACT: Nouveau professionnel avec même email ET professional_id

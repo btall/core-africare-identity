@@ -1,20 +1,28 @@
-"""Service métier pour la gestion des professionnels de santé.
+"""Service metier pour la gestion des professionnels de sante.
 
-Ce module implémente la logique métier pour les opérations CRUD
-et la recherche sur les professionnels.
+Ce module implemente la logique metier pour les operations CRUD
+sur les professionnels avec architecture hybride:
+- HAPI FHIR: Source de verite pour donnees demographiques (Practitioner)
+- PostgreSQL: Metadonnees GDPR locales
 """
 
 from datetime import UTC, datetime
 
+from fhir.resources.practitioner import Practitioner as FHIRPractitioner
 from opentelemetry import trace
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import publish
-from app.models.professional import Professional
+from app.infrastructure.fhir.client import get_fhir_client
+from app.infrastructure.fhir.exceptions import FHIRResourceNotFoundError
+from app.infrastructure.fhir.identifiers import KEYCLOAK_SYSTEM, PROFESSIONAL_LICENSE_SYSTEM
+from app.infrastructure.fhir.mappers.professional_mapper import ProfessionalMapper
+from app.models.gdpr_metadata import ProfessionalGdprMetadata
 from app.schemas.professional import (
     ProfessionalCreate,
     ProfessionalListItem,
+    ProfessionalResponse,
     ProfessionalSearchFilters,
     ProfessionalUpdate,
 )
@@ -26,137 +34,230 @@ async def create_professional(
     db: AsyncSession,
     professional_data: ProfessionalCreate,
     current_user_id: str,
-) -> Professional:
+) -> ProfessionalResponse:
     """
-    Crée un nouveau professionnel dans la base de données.
+    Cree un nouveau professionnel dans FHIR et les metadonnees locales.
+
+    Pattern d'orchestration:
+    1. Mapper vers FHIR Practitioner
+    2. Creer dans HAPI FHIR
+    3. Creer metadonnees GDPR locales
+    4. Publier evenement
+    5. Retourner response avec ID numerique
 
     Args:
-        db: Session de base de données async
-        professional_data: Données du professionnel à créer
-        current_user_id: ID Keycloak de l'utilisateur créateur
+        db: Session de base de donnees async
+        professional_data: Donnees du professionnel a creer
+        current_user_id: ID Keycloak de l'utilisateur createur
 
     Returns:
-        Professional créé avec son ID
+        ProfessionalResponse avec ID numerique local
 
     Raises:
-        IntegrityError: Si keycloak_user_id ou professional_id existe déjà
+        FHIROperationError: Si creation FHIR echoue
+        IntegrityError: Si keycloak_user_id existe deja
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("create_professional") as span:
         span.set_attribute("professional.keycloak_user_id", professional_data.keycloak_user_id)
 
-        # Créer le professionnel directement depuis les données Pydantic
-        professional = Professional(
-            **professional_data.model_dump(),
+        # 1. Mapper vers FHIR Practitioner
+        fhir_practitioner = ProfessionalMapper.to_fhir(professional_data)
+
+        # 2. Creer dans HAPI FHIR
+        created_fhir: FHIRPractitioner = await fhir_client.create(fhir_practitioner)
+        span.set_attribute("fhir.resource_id", created_fhir.id)
+
+        # 3. Creer metadonnees GDPR locales
+        gdpr_metadata = ProfessionalGdprMetadata(
+            fhir_resource_id=created_fhir.id,
+            keycloak_user_id=professional_data.keycloak_user_id,
+            is_verified=False,
+            is_available=professional_data.is_available,
+            notes=professional_data.notes,
             created_by=current_user_id,
             updated_by=current_user_id,
         )
-
-        db.add(professional)
+        db.add(gdpr_metadata)
         await db.commit()
-        await db.refresh(professional)
+        await db.refresh(gdpr_metadata)
 
-        span.set_attribute("professional.id", professional.id)
-        span.add_event("Professionnel créé avec succès")
+        span.set_attribute("professional.id", gdpr_metadata.id)
+        span.add_event("Professionnel cree avec succes")
 
-        # Publier événement
+        # 4. Publier evenement
         await publish(
             "identity.professional.created",
             {
-                "professional_id": professional.id,
-                "keycloak_user_id": professional.keycloak_user_id,
-                "first_name": professional.first_name,
-                "last_name": professional.last_name,
-                "specialty": professional.specialty,
-                "professional_type": professional.professional_type,
+                "professional_id": gdpr_metadata.id,
+                "fhir_resource_id": created_fhir.id,
+                "keycloak_user_id": professional_data.keycloak_user_id,
+                "first_name": professional_data.first_name,
+                "last_name": professional_data.last_name,
+                "specialty": professional_data.specialty,
+                "professional_type": professional_data.professional_type,
                 "created_by": current_user_id,
                 "timestamp": datetime.now(UTC).isoformat(),
             },
         )
 
-        return professional
+        # 5. Retourner response avec ID numerique
+        return ProfessionalMapper.from_fhir(
+            created_fhir,
+            local_id=gdpr_metadata.id,
+            gdpr_metadata=gdpr_metadata.to_dict(),
+        )
 
 
-async def get_professional(db: AsyncSession, professional_id: int) -> Professional | None:
+async def get_professional(
+    db: AsyncSession,
+    professional_id: int,
+) -> ProfessionalResponse | None:
     """
-    Récupère un professionnel par son ID.
+    Recupere un professionnel par son ID numerique local.
+
+    Pattern:
+    1. Lookup local pour obtenir fhir_resource_id
+    2. Fetch depuis HAPI FHIR
+    3. Combiner avec metadonnees GDPR
 
     Args:
-        db: Session de base de données async
-        professional_id: ID du professionnel
+        db: Session de base de donnees async
+        professional_id: ID numerique du professionnel
 
     Returns:
-        Professional trouvé ou None
+        ProfessionalResponse ou None si non trouve
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("get_professional") as span:
         span.set_attribute("professional.id", professional_id)
 
-        result = await db.execute(select(Professional).where(Professional.id == professional_id))
-        professional = result.scalar_one_or_none()
+        # 1. Lookup local
+        result = await db.execute(
+            select(ProfessionalGdprMetadata).where(
+                ProfessionalGdprMetadata.id == professional_id,
+                ProfessionalGdprMetadata.soft_deleted_at.is_(None),
+            )
+        )
+        gdpr_metadata = result.scalar_one_or_none()
 
-        if professional:
-            span.add_event("Professionnel trouvé")
-        else:
-            span.add_event("Professionnel non trouvé")
+        if not gdpr_metadata:
+            span.add_event("Professionnel non trouve (local)")
+            return None
 
-        return professional
+        # 2. Fetch depuis HAPI FHIR
+        fhir_practitioner = await fhir_client.read("Practitioner", gdpr_metadata.fhir_resource_id)
+        if not fhir_practitioner:
+            span.add_event("Professionnel non trouve (FHIR)")
+            return None
+
+        span.add_event("Professionnel trouve")
+
+        # 3. Combiner avec metadonnees GDPR
+        return ProfessionalMapper.from_fhir(
+            fhir_practitioner,
+            local_id=gdpr_metadata.id,
+            gdpr_metadata=gdpr_metadata.to_dict(),
+        )
 
 
 async def get_professional_by_keycloak_id(
-    db: AsyncSession, keycloak_user_id: str
-) -> Professional | None:
+    db: AsyncSession,
+    keycloak_user_id: str,
+) -> ProfessionalResponse | None:
     """
-    Récupère un professionnel par son keycloak_user_id.
+    Recupere un professionnel par son keycloak_user_id.
 
     Args:
-        db: Session de base de données async
+        db: Session de base de donnees async
         keycloak_user_id: UUID Keycloak de l'utilisateur
 
     Returns:
-        Professional trouvé ou None
+        ProfessionalResponse ou None si non trouve
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("get_professional_by_keycloak_id") as span:
         span.set_attribute("professional.keycloak_user_id", keycloak_user_id)
 
+        # Lookup local par keycloak_user_id
         result = await db.execute(
-            select(Professional).where(Professional.keycloak_user_id == keycloak_user_id)
+            select(ProfessionalGdprMetadata).where(
+                ProfessionalGdprMetadata.keycloak_user_id == keycloak_user_id,
+                ProfessionalGdprMetadata.soft_deleted_at.is_(None),
+            )
         )
-        professional = result.scalar_one_or_none()
+        gdpr_metadata = result.scalar_one_or_none()
 
-        if professional:
-            span.add_event("Professionnel trouvé")
-            span.set_attribute("professional.id", professional.id)
-        else:
-            span.add_event("Professionnel non trouvé")
+        if not gdpr_metadata:
+            span.add_event("Professionnel non trouve")
+            return None
 
-        return professional
+        # Fetch depuis FHIR
+        fhir_practitioner = await fhir_client.read("Practitioner", gdpr_metadata.fhir_resource_id)
+        if not fhir_practitioner:
+            return None
+
+        span.set_attribute("professional.id", gdpr_metadata.id)
+        span.add_event("Professionnel trouve")
+
+        return ProfessionalMapper.from_fhir(
+            fhir_practitioner,
+            local_id=gdpr_metadata.id,
+            gdpr_metadata=gdpr_metadata.to_dict(),
+        )
 
 
 async def get_professional_by_professional_id(
-    db: AsyncSession, professional_id: str
-) -> Professional | None:
+    db: AsyncSession,
+    professional_id: str,
+) -> ProfessionalResponse | None:
     """
-    Récupère un professionnel par son numéro d'ordre professionnel.
+    Recupere un professionnel par son numero d'ordre via FHIR search.
 
     Args:
-        db: Session de base de données async
-        professional_id: Numéro d'ordre (CNOM, etc.)
+        db: Session de base de donnees async
+        professional_id: Numero d'ordre (CNOM, etc.)
 
     Returns:
-        Professional trouvé ou None
+        ProfessionalResponse ou None si non trouve
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("get_professional_by_professional_id") as span:
         span.set_attribute("professional.professional_id", professional_id)
 
-        result = await db.execute(
-            select(Professional).where(Professional.professional_id == professional_id)
+        # Recherche FHIR par identifier
+        fhir_practitioner = await fhir_client.search_by_identifier(
+            "Practitioner", PROFESSIONAL_LICENSE_SYSTEM, professional_id
         )
-        professional = result.scalar_one_or_none()
 
-        if professional:
-            span.add_event("Professionnel trouvé")
-            span.set_attribute("professional.id", professional.id)
+        if not fhir_practitioner:
+            span.add_event("Professionnel non trouve (FHIR)")
+            return None
 
-        return professional
+        # Lookup local pour obtenir ID et metadonnees
+        keycloak_id = _extract_keycloak_id(fhir_practitioner)
+        if not keycloak_id:
+            return None
+
+        result = await db.execute(
+            select(ProfessionalGdprMetadata).where(
+                ProfessionalGdprMetadata.keycloak_user_id == keycloak_id,
+                ProfessionalGdprMetadata.soft_deleted_at.is_(None),
+            )
+        )
+        gdpr_metadata = result.scalar_one_or_none()
+
+        if not gdpr_metadata:
+            return None
+
+        span.set_attribute("professional.id", gdpr_metadata.id)
+        span.add_event("Professionnel trouve")
+
+        return ProfessionalMapper.from_fhir(
+            fhir_practitioner,
+            local_id=gdpr_metadata.id,
+            gdpr_metadata=gdpr_metadata.to_dict(),
+        )
 
 
 async def update_professional(
@@ -164,94 +265,167 @@ async def update_professional(
     professional_id: int,
     professional_data: ProfessionalUpdate,
     current_user_id: str,
-) -> Professional | None:
+) -> ProfessionalResponse | None:
     """
-    Met à jour un professionnel existant.
+    Met a jour un professionnel existant.
+
+    Pattern:
+    1. Lookup local
+    2. Fetch FHIR Practitioner
+    3. Appliquer updates via mapper
+    4. Update dans FHIR
+    5. Update metadonnees locales si necessaire
+    6. Publier evenement
 
     Args:
-        db: Session de base de données async
-        professional_id: ID du professionnel à mettre à jour
-        professional_data: Nouvelles données du professionnel
+        db: Session de base de donnees async
+        professional_id: ID du professionnel a mettre a jour
+        professional_data: Nouvelles donnees du professionnel
         current_user_id: ID Keycloak de l'utilisateur modificateur
 
     Returns:
-        Professional mis à jour ou None si non trouvé
+        ProfessionalResponse mis a jour ou None si non trouve
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("update_professional") as span:
         span.set_attribute("professional.id", professional_id)
 
-        professional = await get_professional(db, professional_id)
-        if not professional:
-            span.add_event("Professionnel non trouvé")
+        # 1. Lookup local
+        result = await db.execute(
+            select(ProfessionalGdprMetadata).where(
+                ProfessionalGdprMetadata.id == professional_id,
+                ProfessionalGdprMetadata.soft_deleted_at.is_(None),
+            )
+        )
+        gdpr_metadata = result.scalar_one_or_none()
+
+        if not gdpr_metadata:
+            span.add_event("Professionnel non trouve")
             return None
 
-        # Mettre à jour uniquement les champs fournis
-        update_data = professional_data.model_dump(exclude_unset=True)
-        for field, value in update_data.items():
-            setattr(professional, field, value)
+        # 2. Fetch FHIR Practitioner
+        fhir_practitioner = await fhir_client.read("Practitioner", gdpr_metadata.fhir_resource_id)
+        if not fhir_practitioner:
+            return None
 
-        professional.updated_by = current_user_id
-        professional.updated_at = datetime.now(UTC)
+        # 3. Appliquer updates via mapper
+        updated_fhir = ProfessionalMapper.apply_updates(fhir_practitioner, professional_data)
 
+        # 4. Update dans FHIR
+        try:
+            updated_fhir = await fhir_client.update(updated_fhir)
+        except FHIRResourceNotFoundError:
+            return None
+
+        # 5. Update metadonnees locales si necessaire
+        if professional_data.is_available is not None:
+            gdpr_metadata.is_available = professional_data.is_available
+        if professional_data.notes is not None:
+            gdpr_metadata.notes = professional_data.notes
+        gdpr_metadata.updated_by = current_user_id
+        gdpr_metadata.updated_at = datetime.now(UTC)
         await db.commit()
-        await db.refresh(professional)
+        await db.refresh(gdpr_metadata)
 
-        span.add_event("Professionnel mis à jour avec succès")
+        span.add_event("Professionnel mis a jour avec succes")
 
-        # Publier événement
+        # 6. Publier evenement
         await publish(
             "identity.professional.updated",
             {
-                "professional_id": professional.id,
-                "keycloak_user_id": professional.keycloak_user_id,
+                "professional_id": gdpr_metadata.id,
+                "fhir_resource_id": gdpr_metadata.fhir_resource_id,
+                "keycloak_user_id": gdpr_metadata.keycloak_user_id,
                 "updated_by": current_user_id,
                 "timestamp": datetime.now(UTC).isoformat(),
             },
         )
 
-        return professional
+        return ProfessionalMapper.from_fhir(
+            updated_fhir,
+            local_id=gdpr_metadata.id,
+            gdpr_metadata=gdpr_metadata.to_dict(),
+        )
 
 
 async def delete_professional(
     db: AsyncSession,
     professional_id: int,
     current_user_id: str,
+    deletion_reason: str = "user_request",
 ) -> bool:
     """
-    Supprime (soft delete) un professionnel en le marquant comme inactif.
+    Soft delete un professionnel (RGPD compliant).
+
+    Pattern:
+    1. Marquer metadonnees locales comme supprimees
+    2. Desactiver ressource FHIR (active=false)
+    3. Publier evenement
+
+    Note: L'anonymisation definitive se fait apres periode de grace (7 jours).
 
     Args:
-        db: Session de base de données async
-        professional_id: ID du professionnel à supprimer
+        db: Session de base de donnees async
+        professional_id: ID du professionnel a supprimer
         current_user_id: ID Keycloak de l'utilisateur
+        deletion_reason: Raison de la suppression
 
     Returns:
-        True si supprimé, False si non trouvé
+        True si supprime, False si non trouve
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("delete_professional") as span:
         span.set_attribute("professional.id", professional_id)
 
-        professional = await get_professional(db, professional_id)
-        if not professional:
-            span.add_event("Professionnel non trouvé")
+        # Lookup local
+        result = await db.execute(
+            select(ProfessionalGdprMetadata).where(
+                ProfessionalGdprMetadata.id == professional_id,
+                ProfessionalGdprMetadata.soft_deleted_at.is_(None),
+            )
+        )
+        gdpr_metadata = result.scalar_one_or_none()
+
+        if not gdpr_metadata:
+            span.add_event("Professionnel non trouve")
             return False
 
-        # Soft delete : marquer comme inactif
-        professional.is_active = False
-        professional.updated_by = current_user_id
-        professional.updated_at = datetime.now(UTC)
+        # Verifier si sous enquete
+        if gdpr_metadata.under_investigation:
+            span.add_event("Professionnel sous enquete - suppression bloquee")
+            return False
+
+        # 1. Marquer localement comme supprime
+        gdpr_metadata.soft_deleted_at = datetime.now(UTC)
+        gdpr_metadata.deleted_by = current_user_id
+        gdpr_metadata.deletion_reason = deletion_reason
+        gdpr_metadata.updated_by = current_user_id
+        gdpr_metadata.updated_at = datetime.now(UTC)
+
+        # 2. Desactiver dans FHIR
+        fhir_practitioner = await fhir_client.read("Practitioner", gdpr_metadata.fhir_resource_id)
+        if fhir_practitioner:
+            fhir_practitioner.active = False
+            await fhir_client.update(fhir_practitioner)
 
         await db.commit()
 
-        span.add_event("Professionnel désactivé (soft delete)")
+        span.add_event("Professionnel desactive (soft delete)")
 
-        # Publier événement
+        # 3. Publier evenement
         await publish(
             "identity.professional.deactivated",
             {
-                "professional_id": professional.id,
-                "keycloak_user_id": professional.keycloak_user_id,
+                "professional_id": gdpr_metadata.id,
+                "fhir_resource_id": gdpr_metadata.fhir_resource_id,
+                "keycloak_user_id": gdpr_metadata.keycloak_user_id,
                 "deactivated_by": current_user_id,
+                "deletion_reason": deletion_reason,
+                "grace_period_ends": (
+                    gdpr_metadata.soft_deleted_at.isoformat()
+                    if gdpr_metadata.soft_deleted_at
+                    else None
+                ),
                 "timestamp": datetime.now(UTC).isoformat(),
             },
         )
@@ -259,68 +433,89 @@ async def delete_professional(
         return True
 
 
-async def search_professionals(  # noqa: C901
+async def search_professionals(
     db: AsyncSession,
     filters: ProfessionalSearchFilters,
 ) -> tuple[list[ProfessionalListItem], int]:
     """
-    Recherche des professionnels selon des critères de filtrage.
+    Recherche des professionnels selon des criteres de filtrage.
+
+    Strategie hybride:
+    - Filtres demographiques: FHIR search
+    - Filtres GDPR (is_verified, is_available): Local join
 
     Args:
-        db: Session de base de données async
-        filters: Critères de recherche et pagination
+        db: Session de base de donnees async
+        filters: Criteres de recherche et pagination
 
     Returns:
-        Tuple (liste des professionnels, nombre total de résultats)
+        Tuple (liste des professionnels, nombre total de resultats)
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("search_professionals") as span:
-        # Construction de la requête de base
-        query = select(Professional)
+        # Construire params FHIR
+        fhir_params = _build_fhir_search_params(filters)
 
-        # Application des filtres
-        if filters.first_name:
-            query = query.where(Professional.first_name.ilike(f"%{filters.first_name}%"))
-        if filters.last_name:
-            query = query.where(Professional.last_name.ilike(f"%{filters.last_name}%"))
-        if filters.professional_id:
-            query = query.where(Professional.professional_id == filters.professional_id)
-        if filters.specialty:
-            query = query.where(Professional.specialty.ilike(f"%{filters.specialty}%"))
-        if filters.professional_type:
-            query = query.where(Professional.professional_type == filters.professional_type)
-        if filters.facility_name:
-            query = query.where(Professional.facility_name.ilike(f"%{filters.facility_name}%"))
-        if filters.facility_city:
-            query = query.where(Professional.facility_city == filters.facility_city)
-        if filters.facility_region:
-            query = query.where(Professional.facility_region == filters.facility_region)
-        if filters.is_active is not None:
-            query = query.where(Professional.is_active == filters.is_active)
+        # Recherche FHIR
+        bundle = await fhir_client.search("Practitioner", params=fhir_params)
+        total_fhir = bundle.total or 0
+
+        if not bundle.entry:
+            span.set_attribute("search.total_results", 0)
+            return [], 0
+
+        # Extraire keycloak_ids pour lookup local
+        fhir_practitioners = {}
+        keycloak_ids = []
+        for entry in bundle.entry:
+            if entry.resource:
+                practitioner = entry.resource
+                keycloak_id = _extract_keycloak_id(practitioner)
+                if keycloak_id:
+                    fhir_practitioners[keycloak_id] = practitioner
+                    keycloak_ids.append(keycloak_id)
+
+        # Lookup local pour metadonnees et IDs
+        local_query = select(ProfessionalGdprMetadata).where(
+            ProfessionalGdprMetadata.keycloak_user_id.in_(keycloak_ids),
+            ProfessionalGdprMetadata.soft_deleted_at.is_(None),
+        )
+
+        # Appliquer filtres locaux
         if filters.is_verified is not None:
-            query = query.where(Professional.is_verified == filters.is_verified)
+            local_query = local_query.where(
+                ProfessionalGdprMetadata.is_verified == filters.is_verified
+            )
         if filters.is_available is not None:
-            query = query.where(Professional.is_available == filters.is_available)
+            local_query = local_query.where(
+                ProfessionalGdprMetadata.is_available == filters.is_available
+            )
 
-        # Compter le total
-        count_query = select(func.count()).select_from(query.subquery())
-        total_result = await db.execute(count_query)
-        total = total_result.scalar_one()
+        local_result = await db.execute(local_query)
+        gdpr_records = {r.keycloak_user_id: r for r in local_result.scalars().all()}
+
+        # Combiner resultats
+        professional_items = []
+        for keycloak_id, fhir_practitioner in fhir_practitioners.items():
+            gdpr = gdpr_records.get(keycloak_id)
+            if gdpr:
+                item = ProfessionalMapper.to_list_item(
+                    fhir_practitioner,
+                    local_id=gdpr.id,
+                    gdpr_metadata=gdpr.to_dict(),
+                )
+                professional_items.append(item)
+
+        # Compter total avec filtres locaux
+        total = (
+            len(professional_items)
+            if filters.is_verified is not None or filters.is_available is not None
+            else total_fhir
+        )
 
         span.set_attribute("search.total_results", total)
-
-        # Pagination et tri
-        query = query.order_by(Professional.created_at.desc())
-        query = query.offset(filters.skip).limit(filters.limit)
-
-        # Exécuter la requête
-        result = await db.execute(query)
-        professionals = result.scalars().all()
-
-        span.set_attribute("search.returned_results", len(professionals))
-        span.add_event("Recherche terminée")
-
-        # Convertir en ProfessionalListItem
-        professional_items = [ProfessionalListItem.model_validate(prof) for prof in professionals]
+        span.set_attribute("search.returned_results", len(professional_items))
+        span.add_event("Recherche terminee")
 
         return professional_items, total
 
@@ -329,46 +524,64 @@ async def verify_professional(
     db: AsyncSession,
     professional_id: int,
     current_user_id: str,
-) -> Professional | None:
+) -> ProfessionalResponse | None:
     """
-    Marque un professionnel comme vérifié.
+    Marque un professionnel comme verifie.
 
     Args:
-        db: Session de base de données async
+        db: Session de base de donnees async
         professional_id: ID du professionnel
-        current_user_id: ID Keycloak de l'admin vérifiant
+        current_user_id: ID Keycloak de l'admin verifiant
 
     Returns:
-        Professional vérifié ou None si non trouvé
+        ProfessionalResponse si verifie, None si non trouve
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("verify_professional") as span:
         span.set_attribute("professional.id", professional_id)
 
-        professional = await get_professional(db, professional_id)
-        if not professional:
+        result = await db.execute(
+            select(ProfessionalGdprMetadata).where(
+                ProfessionalGdprMetadata.id == professional_id,
+                ProfessionalGdprMetadata.soft_deleted_at.is_(None),
+            )
+        )
+        gdpr_metadata = result.scalar_one_or_none()
+
+        if not gdpr_metadata:
             return None
 
-        professional.is_verified = True
-        professional.updated_by = current_user_id
-        professional.updated_at = datetime.now(UTC)
+        gdpr_metadata.is_verified = True
+        gdpr_metadata.updated_by = current_user_id
+        gdpr_metadata.updated_at = datetime.now(UTC)
 
         await db.commit()
-        await db.refresh(professional)
+        await db.refresh(gdpr_metadata)
 
-        span.add_event("Professionnel vérifié")
+        span.add_event("Professionnel verifie")
 
-        # Publier événement
+        # Publier evenement
         await publish(
             "identity.professional.verified",
             {
-                "professional_id": professional.id,
-                "keycloak_user_id": professional.keycloak_user_id,
+                "professional_id": gdpr_metadata.id,
+                "fhir_resource_id": gdpr_metadata.fhir_resource_id,
+                "keycloak_user_id": gdpr_metadata.keycloak_user_id,
                 "verified_by": current_user_id,
                 "timestamp": datetime.now(UTC).isoformat(),
             },
         )
 
-        return professional
+        # Fetch FHIR resource and return full response
+        fhir_practitioner = await fhir_client.read("Practitioner", gdpr_metadata.fhir_resource_id)
+        if not fhir_practitioner:
+            return None
+
+        return ProfessionalMapper.from_fhir(
+            fhir_practitioner,
+            gdpr_metadata.id,
+            gdpr_metadata.to_dict(),
+        )
 
 
 async def toggle_availability(
@@ -376,46 +589,131 @@ async def toggle_availability(
     professional_id: int,
     is_available: bool,
     current_user_id: str,
-) -> Professional | None:
+) -> ProfessionalResponse | None:
     """
-    Change la disponibilité d'un professionnel pour consultations.
+    Change la disponibilite d'un professionnel pour consultations.
+
+    Operation locale uniquement (is_available n'est pas dans FHIR standard).
 
     Args:
-        db: Session de base de données async
+        db: Session de base de donnees async
         professional_id: ID du professionnel
         is_available: True pour disponible, False pour indisponible
         current_user_id: ID Keycloak
 
     Returns:
-        Professional mis à jour ou None si non trouvé
+        ProfessionalResponse si mis a jour, None si non trouve
     """
+    fhir_client = get_fhir_client()
     with tracer.start_as_current_span("toggle_availability") as span:
         span.set_attribute("professional.id", professional_id)
         span.set_attribute("professional.is_available", is_available)
 
-        professional = await get_professional(db, professional_id)
-        if not professional:
+        result = await db.execute(
+            select(ProfessionalGdprMetadata).where(
+                ProfessionalGdprMetadata.id == professional_id,
+                ProfessionalGdprMetadata.soft_deleted_at.is_(None),
+            )
+        )
+        gdpr_metadata = result.scalar_one_or_none()
+
+        if not gdpr_metadata:
             return None
 
-        professional.is_available = is_available
-        professional.updated_by = current_user_id
-        professional.updated_at = datetime.now(UTC)
+        gdpr_metadata.is_available = is_available
+        gdpr_metadata.updated_by = current_user_id
+        gdpr_metadata.updated_at = datetime.now(UTC)
 
         await db.commit()
-        await db.refresh(professional)
+        await db.refresh(gdpr_metadata)
 
-        span.add_event("Disponibilité mise à jour")
+        span.add_event("Disponibilite mise a jour")
 
-        # Publier événement
+        # Publier evenement
         await publish(
             "identity.professional.availability_changed",
             {
-                "professional_id": professional.id,
-                "keycloak_user_id": professional.keycloak_user_id,
+                "professional_id": gdpr_metadata.id,
+                "fhir_resource_id": gdpr_metadata.fhir_resource_id,
+                "keycloak_user_id": gdpr_metadata.keycloak_user_id,
                 "is_available": is_available,
                 "changed_by": current_user_id,
                 "timestamp": datetime.now(UTC).isoformat(),
             },
         )
 
-        return professional
+        # Fetch FHIR resource and return full response
+        fhir_practitioner = await fhir_client.read("Practitioner", gdpr_metadata.fhir_resource_id)
+        if not fhir_practitioner:
+            return None
+
+        return ProfessionalMapper.from_fhir(
+            fhir_practitioner,
+            gdpr_metadata.id,
+            gdpr_metadata.to_dict(),
+        )
+
+
+async def get_professional_gdpr_metadata(
+    db: AsyncSession,
+    professional_id: int,
+) -> ProfessionalGdprMetadata | None:
+    """
+    Recupere les metadonnees GDPR locales d'un professionnel.
+
+    Utile pour les operations admin (enquete, anonymisation).
+
+    Args:
+        db: Session de base de donnees async
+        professional_id: ID du professionnel
+
+    Returns:
+        ProfessionalGdprMetadata ou None
+    """
+    result = await db.execute(
+        select(ProfessionalGdprMetadata).where(ProfessionalGdprMetadata.id == professional_id)
+    )
+    return result.scalar_one_or_none()
+
+
+# =============================================================================
+# Helper functions
+# =============================================================================
+
+
+def _extract_keycloak_id(fhir_practitioner: FHIRPractitioner) -> str | None:
+    """Extrait le keycloak_user_id des identifiers FHIR."""
+    if not fhir_practitioner.identifier:
+        return None
+
+    for identifier in fhir_practitioner.identifier:
+        if identifier.system == KEYCLOAK_SYSTEM:
+            return identifier.value
+
+    return None
+
+
+def _build_fhir_search_params(filters: ProfessionalSearchFilters) -> dict[str, str]:
+    """Construit les parametres de recherche FHIR depuis les filtres."""
+    params = {}
+
+    if filters.first_name:
+        params["given"] = filters.first_name
+    if filters.last_name:
+        params["family"] = filters.last_name
+    if filters.professional_id:
+        params["identifier"] = f"{PROFESSIONAL_LICENSE_SYSTEM}|{filters.professional_id}"
+    if filters.specialty:
+        params["qualification-code"] = filters.specialty
+    if filters.facility_city:
+        params["address-city"] = filters.facility_city
+    if filters.facility_region:
+        params["address-state"] = filters.facility_region
+    if filters.is_active is not None:
+        params["active"] = str(filters.is_active).lower()
+
+    # Pagination FHIR
+    params["_count"] = str(filters.limit)
+    params["_offset"] = str(filters.skip)
+
+    return params

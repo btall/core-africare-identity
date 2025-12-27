@@ -1,14 +1,23 @@
-"""Scheduled task pour anonymisation des patients après période de grâce."""
+"""Scheduled task pour anonymisation des patients après période de grâce.
+
+Architecture hybride FHIR + PostgreSQL:
+- Requête sur PatientGdprMetadata pour trouver les suppressions expirées
+- Anonymisation des données FHIR (Patient resource)
+- Mise à jour de gdpr.anonymized_at dans PostgreSQL
+"""
 
 import logging
 from datetime import UTC, datetime, timedelta
 
+import bcrypt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import async_session_maker
 from app.core.events import publish
-from app.models.patient import Patient
+from app.infrastructure.fhir.client import get_fhir_client
+from app.infrastructure.fhir.identifiers import KEYCLOAK_SYSTEM, NATIONAL_ID_SYSTEM
+from app.models.gdpr_metadata import PatientGdprMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -19,10 +28,15 @@ async def anonymize_expired_patient_deletions(db: AsyncSession | None = None) ->
 
     Cette tâche doit être exécutée quotidiennement (via APScheduler ou Celery).
 
+    Architecture hybride:
+    - Query sur PatientGdprMetadata (soft_deleted_at, anonymized_at)
+    - Anonymisation des données FHIR Patient
+    - Mise à jour de gdpr.anonymized_at
+
     Logique:
     1. Trouve tous les patients avec soft_deleted_at < now() - 7 jours
-    2. Pour chaque patient, appelle _anonymize_entity()
-    3. Set anonymized_at = now()
+    2. Pour chaque patient, anonymise la ressource FHIR
+    3. Set anonymized_at = now() dans GDPR metadata
     4. Publie événement identity.patient.anonymized
 
     Args:
@@ -44,67 +58,159 @@ async def _anonymize_expired_patient_deletions_impl(db: AsyncSession) -> int:
     now = datetime.now(UTC)
     expiration_threshold = now - timedelta(days=7)
 
-    # Trouver les suppressions expirées
+    # Trouver les suppressions expirées dans GDPR metadata
     result = await db.execute(
-        select(Patient).where(
-            Patient.soft_deleted_at.isnot(None),
-            Patient.soft_deleted_at <= expiration_threshold,
-            Patient.anonymized_at.is_(None),  # Pas encore anonymisé
+        select(PatientGdprMetadata).where(
+            PatientGdprMetadata.soft_deleted_at.isnot(None),
+            PatientGdprMetadata.soft_deleted_at <= expiration_threshold,
+            PatientGdprMetadata.anonymized_at.is_(None),  # Pas encore anonymisé
         )
     )
-    expired_patients = result.scalars().all()
+    expired_records = result.scalars().all()
 
-    if not expired_patients:
+    if not expired_records:
         logger.info("Aucun patient à anonymiser")
         return 0
 
     logger.info(
-        f"Trouvé {len(expired_patients)} patients à anonymiser",
-        extra={"count": len(expired_patients)},
+        f"Trouvé {len(expired_records)} patients à anonymiser",
+        extra={"count": len(expired_records)},
     )
+
+    # Récupérer client FHIR
+    fhir_client = get_fhir_client()
 
     anonymized_count = 0
 
-    for patient in expired_patients:
+    for gdpr in expired_records:
+        # Capturer les valeurs avant toute opération async
+        gdpr_id = gdpr.id
+        fhir_resource_id = gdpr.fhir_resource_id
+        soft_deleted_at = gdpr.soft_deleted_at
+        deletion_reason = gdpr.deletion_reason
+
         try:
-            # Import _anonymize_entity depuis keycloak_sync_service
-            from app.services.keycloak_sync_service import _anonymize_entity
+            logger.info(f"Anonymisation du patient {gdpr_id} (soft deleted le {soft_deleted_at})")
 
-            logger.info(
-                f"Anonymisation du patient {patient.id} (soft deleted le {patient.soft_deleted_at})"
-            )
+            # Récupérer et anonymiser la ressource FHIR
+            fhir_patient = await fhir_client.read("Patient", fhir_resource_id)
+            _anonymize_fhir_patient(fhir_patient, gdpr_id)
+            await fhir_client.update(fhir_patient)
 
-            # Effectuer l'anonymisation
-            _anonymize_entity(patient)
-            patient.anonymized_at = now
+            # Marquer comme anonymisé dans GDPR metadata
+            gdpr.anonymized_at = now
+            gdpr.updated_at = now
 
             await db.commit()
-            await db.refresh(patient)
+            await db.refresh(gdpr)
 
             # Publier événement anonymized
             await publish(
                 "identity.patient.anonymized",
                 {
-                    "patient_id": patient.id,
+                    "patient_id": gdpr_id,
                     "anonymized_at": now.isoformat(),
-                    "soft_deleted_at": (
-                        patient.soft_deleted_at.isoformat() if patient.soft_deleted_at else None
-                    ),
-                    "deletion_reason": patient.deletion_reason,
+                    "soft_deleted_at": (soft_deleted_at.isoformat() if soft_deleted_at else None),
+                    "deletion_reason": deletion_reason,
                     "grace_period_days": 7,
                 },
             )
 
             anonymized_count += 1
-            logger.info(f"Patient {patient.id} anonymisé avec succès")
+            logger.info(f"Patient {gdpr_id} anonymisé avec succès")
 
         except Exception as e:
-            logger.error(f"Échec anonymisation patient {patient.id}: {e}", exc_info=True)
+            logger.error(f"Échec anonymisation patient {gdpr_id}: {e}", exc_info=True)
             await db.rollback()
             continue
 
-    logger.info(f"Anonymisation terminée: {anonymized_count}/{len(expired_patients)} réussies")
+    logger.info(f"Anonymisation terminée: {anonymized_count}/{len(expired_records)} réussies")
     return anonymized_count
+
+
+def _anonymize_fhir_patient(patient, gdpr_id: int) -> None:
+    """
+    Anonymise une ressource FHIR Patient.
+
+    Remplace les données PII par des valeurs hashées bcrypt irréversibles.
+
+    Args:
+        patient: Ressource FHIR Patient à anonymiser
+        gdpr_id: ID local pour générer les valeurs anonymisées
+    """
+    from fhir.resources.address import Address
+    from fhir.resources.contactpoint import ContactPoint
+    from fhir.resources.humanname import HumanName
+    from fhir.resources.identifier import Identifier
+
+    salt = bcrypt.gensalt()
+
+    # Anonymiser le nom
+    anonymized_first = bcrypt.hashpw(f"ANONYME_{gdpr_id}".encode(), salt).decode("utf-8")
+    anonymized_last = bcrypt.hashpw(f"PATIENT_{gdpr_id}".encode(), salt).decode("utf-8")
+    patient.name = [HumanName(family=anonymized_last, given=[anonymized_first])]
+
+    # Anonymiser les contacts (email, phone)
+    anonymized_email = bcrypt.hashpw(f"deleted_{gdpr_id}@anonymized.local".encode(), salt).decode(
+        "utf-8"
+    )
+    anonymized_phone = "+ANONYMIZED"
+    patient.telecom = [
+        ContactPoint(system="email", value=anonymized_email),
+        ContactPoint(system="phone", value=anonymized_phone),
+    ]
+
+    # Anonymiser l'adresse
+    patient.address = [
+        Address(
+            line=["Anonymisé"],
+            city="Anonymisé",
+            state="Anonymisé",
+            country="Anonymisé",
+        )
+    ]
+
+    # Anonymiser les identifiants
+    if patient.identifier:
+        new_identifiers = []
+        for identifier in patient.identifier:
+            if identifier.system == KEYCLOAK_SYSTEM:
+                # Remplacer par un ID anonymisé
+                anonymized_keycloak = bcrypt.hashpw(
+                    f"keycloak_anon_{gdpr_id}".encode(), salt
+                ).decode("utf-8")
+                new_identifiers.append(
+                    Identifier(system=KEYCLOAK_SYSTEM, value=anonymized_keycloak)
+                )
+            elif identifier.system == NATIONAL_ID_SYSTEM:
+                # Anonymiser le numéro national
+                anonymized_national = bcrypt.hashpw(
+                    f"national_anon_{gdpr_id}".encode(), salt
+                ).decode("utf-8")
+                new_identifiers.append(
+                    Identifier(system=NATIONAL_ID_SYSTEM, value=anonymized_national)
+                )
+            else:
+                # Garder les autres identifiants
+                new_identifiers.append(identifier)
+        patient.identifier = new_identifiers
+
+    # Supprimer le contact d'urgence
+    patient.contact = None
+
+    # Supprimer les communications (langues préférées)
+    patient.communication = None
+
+    # Supprimer les extensions (GPS, etc.)
+    patient.extension = None
+
+    # Anonymiser la date de naissance (garder juste l'année)
+    if patient.birthDate:
+        # Garder seulement l'année pour les statistiques
+        patient.birthDate = f"{patient.birthDate[:4]}-01-01"
+
+    # Garder active=false
+    patient.active = False
 
 
 # Exemple d'intégration APScheduler (optionnel, pour référence)
