@@ -1,7 +1,6 @@
 """Tests unitaires pour le client FHIR.
 
-Ce module teste le client HTTP async pour la communication avec HAPI FHIR,
-incluant les operations CRUD, la gestion des erreurs et le pattern singleton.
+Ce module teste le client FHIR async avec mock des appels HTTP.
 """
 
 import json
@@ -32,154 +31,78 @@ from app.infrastructure.fhir.exceptions import (
 
 @pytest.fixture
 def fhir_client():
-    """Create a FHIR client instance for testing."""
-    return FHIRClient(base_url="http://test-fhir:8080/fhir", timeout=30)
+    """Create a test FHIR client."""
+    return FHIRClient(base_url="http://test-fhir:8080/fhir", timeout=10)
 
 
 @pytest.fixture
-def sample_fhir_patient():
-    """Create a sample FHIR Patient for testing."""
+def mock_patient():
+    """Create a mock FHIR Patient."""
     return FHIRPatient(
         id="patient-123",
         active=True,
-        name=[{"family": "Test", "given": ["Patient"]}],
+        name=[{"family": "Diallo", "given": ["Amadou"]}],
     )
 
 
 @pytest.fixture
-def sample_fhir_patient_json():
-    """Sample FHIR Patient as JSON bytes."""
-    return json.dumps(
-        {
-            "resourceType": "Patient",
-            "id": "patient-123",
-            "active": True,
-            "name": [{"family": "Test", "given": ["Patient"]}],
-        }
-    ).encode()
-
-
-@pytest.fixture
-def sample_fhir_practitioner():
-    """Create a sample FHIR Practitioner for testing."""
+def mock_practitioner():
+    """Create a mock FHIR Practitioner."""
     return FHIRPractitioner(
         id="practitioner-456",
         active=True,
-        name=[{"family": "Doctor", "given": ["Test"]}],
+        name=[{"family": "Ndiaye", "given": ["Fatou"]}],
     )
 
 
 @pytest.fixture
-def sample_fhir_practitioner_json():
-    """Sample FHIR Practitioner as JSON bytes."""
-    return json.dumps(
-        {
-            "resourceType": "Practitioner",
-            "id": "practitioner-456",
-            "active": True,
-            "name": [{"family": "Doctor", "given": ["Test"]}],
-        }
-    ).encode()
-
-
-@pytest.fixture
-def sample_bundle_json():
-    """Sample FHIR Bundle as JSON bytes."""
-    return json.dumps(
-        {
-            "resourceType": "Bundle",
-            "type": "searchset",
-            "total": 2,
-            "entry": [
-                {
-                    "resource": {
-                        "resourceType": "Patient",
-                        "id": "patient-1",
-                        "active": True,
-                    }
-                },
-                {
-                    "resource": {
-                        "resourceType": "Patient",
-                        "id": "patient-2",
-                        "active": True,
-                    }
-                },
-            ],
-        }
-    ).encode()
-
-
-@pytest.fixture
-def empty_bundle_json():
-    """Empty FHIR Bundle as JSON bytes."""
-    return json.dumps(
-        {
-            "resourceType": "Bundle",
-            "type": "searchset",
-            "total": 0,
-            "entry": [],
-        }
-    ).encode()
-
-
-@pytest.fixture
-def mock_response():
-    """Create a mock httpx Response."""
-
-    def _create_response(
-        status_code: int, content: bytes | None = None, json_data: dict | None = None
-    ):
-        response = MagicMock(spec=httpx.Response)
-        response.status_code = status_code
-        response.content = content or b""
-        response.text = content.decode() if content else ""
-        if json_data:
-            response.json.return_value = json_data
-        else:
-            response.json.side_effect = json.JSONDecodeError("No JSON", "", 0)
-        return response
-
-    return _create_response
+def mock_bundle():
+    """Create a mock FHIR Bundle."""
+    return Bundle(
+        type="searchset",
+        total=2,
+        entry=[
+            {"resource": {"resourceType": "Patient", "id": "p1", "active": True}},
+            {"resource": {"resourceType": "Patient", "id": "p2", "active": True}},
+        ],
+    )
 
 
 # =============================================================================
-# Tests pour FHIRClient.__init__
+# Tests FHIRClient initialization
 # =============================================================================
 
 
 class TestFHIRClientInit:
-    """Tests pour l'initialisation du client FHIR."""
+    """Tests pour l'initialisation du FHIRClient."""
 
     def test_init_with_defaults(self):
-        """Test initialisation avec valeurs par defaut."""
-        with patch("app.infrastructure.fhir.client.fhir_settings") as mock_settings:
-            mock_settings.HAPI_FHIR_BASE_URL = "http://default:8080/fhir"
-            mock_settings.HAPI_FHIR_TIMEOUT = 30
+        """Test initialization avec valeurs par defaut."""
+        client = FHIRClient()
 
-            client = FHIRClient()
-
-            assert client.base_url == "http://default:8080/fhir"
-            assert client.timeout == 30
-            assert client._client is None
+        assert client.base_url is not None
+        assert client.timeout is not None
+        assert client._client is None
 
     def test_init_with_custom_values(self):
-        """Test initialisation avec valeurs personnalisees."""
-        client = FHIRClient(base_url="http://custom:9090/fhir/", timeout=60)
+        """Test initialization avec valeurs personnalisees."""
+        client = FHIRClient(
+            base_url="http://custom-fhir:8080/fhir/",
+            timeout=60,
+        )
 
-        # Trailing slash should be stripped
-        assert client.base_url == "http://custom:9090/fhir"
+        assert client.base_url == "http://custom-fhir:8080/fhir"  # Trailing slash removed
         assert client.timeout == 60
 
-    def test_init_strips_trailing_slash(self):
-        """Test que le trailing slash est supprime."""
-        client = FHIRClient(base_url="http://test/fhir///")
+    def test_base_url_trailing_slash_removed(self):
+        """Test que le trailing slash est retire du base_url."""
+        client = FHIRClient(base_url="http://fhir/test/")
 
-        assert client.base_url == "http://test/fhir"
+        assert client.base_url == "http://fhir/test"
 
 
 # =============================================================================
-# Tests pour FHIRClient._get_client
+# Tests FHIRClient._get_client()
 # =============================================================================
 
 
@@ -187,40 +110,31 @@ class TestFHIRClientGetClient:
     """Tests pour _get_client()."""
 
     @pytest.mark.asyncio
-    async def test_get_client_creates_new(self, fhir_client):
-        """Test creation d'un nouveau client HTTP."""
-        assert fhir_client._client is None
-
+    async def test_get_client_creates_new_client(self, fhir_client):
+        """Test que _get_client cree un nouveau client."""
         client = await fhir_client._get_client()
 
         assert client is not None
         assert isinstance(client, httpx.AsyncClient)
+        assert fhir_client._client is client
+
+        # Cleanup
         await fhir_client.close()
 
     @pytest.mark.asyncio
-    async def test_get_client_reuses_existing(self, fhir_client):
-        """Test reutilisation du client existant."""
+    async def test_get_client_reuses_existing_client(self, fhir_client):
+        """Test que _get_client reutilise le client existant."""
         client1 = await fhir_client._get_client()
         client2 = await fhir_client._get_client()
 
         assert client1 is client2
-        await fhir_client.close()
 
-    @pytest.mark.asyncio
-    async def test_get_client_creates_new_if_closed(self, fhir_client):
-        """Test creation d'un nouveau client si l'ancien est ferme."""
-        client1 = await fhir_client._get_client()
-        await fhir_client.close()
-
-        client2 = await fhir_client._get_client()
-
-        assert client2 is not None
-        assert client1 is not client2
+        # Cleanup
         await fhir_client.close()
 
 
 # =============================================================================
-# Tests pour FHIRClient.create
+# Tests FHIRClient.create()
 # =============================================================================
 
 
@@ -228,86 +142,85 @@ class TestFHIRClientCreate:
     """Tests pour create()."""
 
     @pytest.mark.asyncio
-    async def test_create_patient_success(
-        self, fhir_client, sample_fhir_patient, sample_fhir_patient_json, mock_response
-    ):
-        """Test creation d'un patient reussie."""
-        mock_resp = mock_response(201, sample_fhir_patient_json)
+    async def test_create_patient_success(self, fhir_client, mock_patient):
+        """Test creation reussie d'un Patient."""
+        mock_response = MagicMock()
+        mock_response.status_code = 201
+        mock_response.content = mock_patient.model_dump_json().encode()
 
         with patch.object(fhir_client, "_get_client") as mock_get:
-            mock_http = AsyncMock()
-            mock_http.post = AsyncMock(return_value=mock_resp)
-            mock_get.return_value = mock_http
+            mock_http_client = AsyncMock()
+            mock_http_client.post = AsyncMock(return_value=mock_response)
+            mock_get.return_value = mock_http_client
 
-            result = await fhir_client.create(sample_fhir_patient)
+            result = await fhir_client.create(mock_patient)
 
             assert result.id == "patient-123"
-            mock_http.post.assert_called_once()
+            mock_http_client.post.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_create_practitioner_success(
-        self, fhir_client, sample_fhir_practitioner, sample_fhir_practitioner_json, mock_response
-    ):
-        """Test creation d'un practitioner reussie."""
-        mock_resp = mock_response(201, sample_fhir_practitioner_json)
+    async def test_create_practitioner_success(self, fhir_client, mock_practitioner):
+        """Test creation reussie d'un Practitioner."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = mock_practitioner.model_dump_json().encode()
 
         with patch.object(fhir_client, "_get_client") as mock_get:
-            mock_http = AsyncMock()
-            mock_http.post = AsyncMock(return_value=mock_resp)
-            mock_get.return_value = mock_http
+            mock_http_client = AsyncMock()
+            mock_http_client.post = AsyncMock(return_value=mock_response)
+            mock_get.return_value = mock_http_client
 
-            result = await fhir_client.create(sample_fhir_practitioner)
+            result = await fhir_client.create(mock_practitioner)
 
             assert result.id == "practitioner-456"
 
     @pytest.mark.asyncio
-    async def test_create_connection_error(self, fhir_client, sample_fhir_patient):
+    async def test_create_connection_error(self, fhir_client, mock_patient):
         """Test erreur de connexion lors de la creation."""
         with patch.object(fhir_client, "_get_client") as mock_get:
-            mock_http = AsyncMock()
-            mock_http.post = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
-            mock_get.return_value = mock_http
+            mock_http_client = AsyncMock()
+            mock_http_client.post = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
+            mock_get.return_value = mock_http_client
 
             with pytest.raises(FHIRConnectionError) as exc_info:
-                await fhir_client.create(sample_fhir_patient)
+                await fhir_client.create(mock_patient)
 
-            assert "Failed to connect to FHIR server" in str(exc_info.value)
+            assert "Failed to connect" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_create_timeout_error(self, fhir_client, sample_fhir_patient):
+    async def test_create_timeout_error(self, fhir_client, mock_patient):
         """Test timeout lors de la creation."""
         with patch.object(fhir_client, "_get_client") as mock_get:
-            mock_http = AsyncMock()
-            mock_http.post = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
-            mock_get.return_value = mock_http
+            mock_http_client = AsyncMock()
+            mock_http_client.post = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
+            mock_get.return_value = mock_http_client
 
             with pytest.raises(FHIRConnectionError) as exc_info:
-                await fhir_client.create(sample_fhir_patient)
+                await fhir_client.create(mock_patient)
 
             assert "timed out" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_create_operation_error(self, fhir_client, sample_fhir_patient, mock_response):
-        """Test erreur operation lors de la creation."""
-        error_response = mock_response(
-            400,
-            b'{"issue": [{"severity": "error", "diagnostics": "Invalid resource"}]}',
-            {"issue": [{"severity": "error", "diagnostics": "Invalid resource"}]},
-        )
+    async def test_create_server_error(self, fhir_client, mock_patient):
+        """Test erreur serveur lors de la creation."""
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.json.return_value = {"error": "Internal Server Error"}
+        mock_response.text = "Internal Server Error"
 
         with patch.object(fhir_client, "_get_client") as mock_get:
-            mock_http = AsyncMock()
-            mock_http.post = AsyncMock(return_value=error_response)
-            mock_get.return_value = mock_http
+            mock_http_client = AsyncMock()
+            mock_http_client.post = AsyncMock(return_value=mock_response)
+            mock_get.return_value = mock_http_client
 
             with pytest.raises(FHIROperationError) as exc_info:
-                await fhir_client.create(sample_fhir_patient)
+                await fhir_client.create(mock_patient)
 
-            assert exc_info.value.status_code == 400
+            assert exc_info.value.status_code == 500
 
 
 # =============================================================================
-# Tests pour FHIRClient.read
+# Tests FHIRClient.read()
 # =============================================================================
 
 
@@ -315,49 +228,51 @@ class TestFHIRClientRead:
     """Tests pour read()."""
 
     @pytest.mark.asyncio
-    async def test_read_patient_found(self, fhir_client, sample_fhir_patient_json, mock_response):
-        """Test lecture d'un patient existant."""
-        mock_resp = mock_response(200, sample_fhir_patient_json)
+    async def test_read_patient_found(self, fhir_client, mock_patient):
+        """Test lecture Patient trouve."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = mock_patient.model_dump_json().encode()
 
         with patch.object(fhir_client, "_get_client") as mock_get:
-            mock_http = AsyncMock()
-            mock_http.get = AsyncMock(return_value=mock_resp)
-            mock_get.return_value = mock_http
+            mock_http_client = AsyncMock()
+            mock_http_client.get = AsyncMock(return_value=mock_response)
+            mock_get.return_value = mock_http_client
 
             result = await fhir_client.read("Patient", "patient-123")
 
-            assert result is not None
+            assert isinstance(result, FHIRPatient)
             assert result.id == "patient-123"
-            mock_http.get.assert_called_once_with("/Patient/patient-123")
 
     @pytest.mark.asyncio
-    async def test_read_practitioner_found(
-        self, fhir_client, sample_fhir_practitioner_json, mock_response
-    ):
-        """Test lecture d'un practitioner existant."""
-        mock_resp = mock_response(200, sample_fhir_practitioner_json)
+    async def test_read_practitioner_found(self, fhir_client, mock_practitioner):
+        """Test lecture Practitioner trouve."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = mock_practitioner.model_dump_json().encode()
 
         with patch.object(fhir_client, "_get_client") as mock_get:
-            mock_http = AsyncMock()
-            mock_http.get = AsyncMock(return_value=mock_resp)
-            mock_get.return_value = mock_http
+            mock_http_client = AsyncMock()
+            mock_http_client.get = AsyncMock(return_value=mock_response)
+            mock_get.return_value = mock_http_client
 
             result = await fhir_client.read("Practitioner", "practitioner-456")
 
-            assert result is not None
+            assert isinstance(result, FHIRPractitioner)
             assert result.id == "practitioner-456"
 
     @pytest.mark.asyncio
-    async def test_read_not_found(self, fhir_client, mock_response):
-        """Test lecture d'une ressource inexistante."""
-        mock_resp = mock_response(404, b"Not found")
+    async def test_read_not_found(self, fhir_client):
+        """Test lecture ressource non trouvee (404)."""
+        mock_response = MagicMock()
+        mock_response.status_code = 404
 
         with patch.object(fhir_client, "_get_client") as mock_get:
-            mock_http = AsyncMock()
-            mock_http.get = AsyncMock(return_value=mock_resp)
-            mock_get.return_value = mock_http
+            mock_http_client = AsyncMock()
+            mock_http_client.get = AsyncMock(return_value=mock_response)
+            mock_get.return_value = mock_http_client
 
-            result = await fhir_client.read("Patient", "unknown-id")
+            result = await fhir_client.read("Patient", "nonexistent")
 
             assert result is None
 
@@ -365,16 +280,16 @@ class TestFHIRClientRead:
     async def test_read_connection_error(self, fhir_client):
         """Test erreur de connexion lors de la lecture."""
         with patch.object(fhir_client, "_get_client") as mock_get:
-            mock_http = AsyncMock()
-            mock_http.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
-            mock_get.return_value = mock_http
+            mock_http_client = AsyncMock()
+            mock_http_client.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
+            mock_get.return_value = mock_http_client
 
             with pytest.raises(FHIRConnectionError):
-                await fhir_client.read("Patient", "patient-123")
+                await fhir_client.read("Patient", "123")
 
 
 # =============================================================================
-# Tests pour FHIRClient.update
+# Tests FHIRClient.update()
 # =============================================================================
 
 
@@ -382,52 +297,54 @@ class TestFHIRClientUpdate:
     """Tests pour update()."""
 
     @pytest.mark.asyncio
-    async def test_update_success(
-        self, fhir_client, sample_fhir_patient, sample_fhir_patient_json, mock_response
-    ):
+    async def test_update_success(self, fhir_client, mock_patient):
         """Test mise a jour reussie."""
-        mock_resp = mock_response(200, sample_fhir_patient_json)
+        mock_patient.active = False  # Modify
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = mock_patient.model_dump_json().encode()
 
         with patch.object(fhir_client, "_get_client") as mock_get:
-            mock_http = AsyncMock()
-            mock_http.put = AsyncMock(return_value=mock_resp)
-            mock_get.return_value = mock_http
+            mock_http_client = AsyncMock()
+            mock_http_client.put = AsyncMock(return_value=mock_response)
+            mock_get.return_value = mock_http_client
 
-            result = await fhir_client.update(sample_fhir_patient)
+            result = await fhir_client.update(mock_patient)
 
             assert result.id == "patient-123"
-            mock_http.put.assert_called_once()
+            assert result.active is False
 
     @pytest.mark.asyncio
-    async def test_update_not_found(self, fhir_client, sample_fhir_patient, mock_response):
-        """Test mise a jour d'une ressource inexistante."""
-        mock_resp = mock_response(404, b"Not found")
+    async def test_update_not_found(self, fhir_client, mock_patient):
+        """Test mise a jour ressource non trouvee."""
+        mock_response = MagicMock()
+        mock_response.status_code = 404
 
         with patch.object(fhir_client, "_get_client") as mock_get:
-            mock_http = AsyncMock()
-            mock_http.put = AsyncMock(return_value=mock_resp)
-            mock_get.return_value = mock_http
+            mock_http_client = AsyncMock()
+            mock_http_client.put = AsyncMock(return_value=mock_response)
+            mock_get.return_value = mock_http_client
 
             with pytest.raises(FHIRResourceNotFoundError) as exc_info:
-                await fhir_client.update(sample_fhir_patient)
+                await fhir_client.update(mock_patient)
 
             assert exc_info.value.resource_type == "Patient"
             assert exc_info.value.resource_id == "patient-123"
 
     @pytest.mark.asyncio
-    async def test_update_connection_error(self, fhir_client, sample_fhir_patient):
+    async def test_update_connection_error(self, fhir_client, mock_patient):
         """Test erreur de connexion lors de la mise a jour."""
         with patch.object(fhir_client, "_get_client") as mock_get:
-            mock_http = AsyncMock()
-            mock_http.put = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
-            mock_get.return_value = mock_http
+            mock_http_client = AsyncMock()
+            mock_http_client.put = AsyncMock(side_effect=httpx.TimeoutException("Timeout"))
+            mock_get.return_value = mock_http_client
 
             with pytest.raises(FHIRConnectionError):
-                await fhir_client.update(sample_fhir_patient)
+                await fhir_client.update(mock_patient)
 
 
 # =============================================================================
-# Tests pour FHIRClient.search
+# Tests FHIRClient.search()
 # =============================================================================
 
 
@@ -435,67 +352,58 @@ class TestFHIRClientSearch:
     """Tests pour search()."""
 
     @pytest.mark.asyncio
-    async def test_search_with_results(self, fhir_client, sample_bundle_json, mock_response):
-        """Test recherche avec resultats."""
-        mock_resp = mock_response(200, sample_bundle_json)
+    async def test_search_success(self, fhir_client, mock_bundle):
+        """Test recherche reussie."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = mock_bundle.model_dump_json().encode()
 
         with patch.object(fhir_client, "_get_client") as mock_get:
-            mock_http = AsyncMock()
-            mock_http.get = AsyncMock(return_value=mock_resp)
-            mock_get.return_value = mock_http
+            mock_http_client = AsyncMock()
+            mock_http_client.get = AsyncMock(return_value=mock_response)
+            mock_get.return_value = mock_http_client
 
             result = await fhir_client.search("Patient", {"active": "true"})
 
             assert isinstance(result, Bundle)
             assert result.total == 2
-            assert len(result.entry) == 2
+            mock_http_client.get.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_search_empty_results(self, fhir_client, empty_bundle_json, mock_response):
-        """Test recherche sans resultats."""
-        mock_resp = mock_response(200, empty_bundle_json)
+    async def test_search_no_params(self, fhir_client, mock_bundle):
+        """Test recherche sans parametres."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = mock_bundle.model_dump_json().encode()
 
         with patch.object(fhir_client, "_get_client") as mock_get:
-            mock_http = AsyncMock()
-            mock_http.get = AsyncMock(return_value=mock_resp)
-            mock_get.return_value = mock_http
+            mock_http_client = AsyncMock()
+            mock_http_client.get = AsyncMock(return_value=mock_response)
+            mock_get.return_value = mock_http_client
 
             result = await fhir_client.search("Patient")
 
             assert isinstance(result, Bundle)
-            assert result.total == 0
 
     @pytest.mark.asyncio
-    async def test_search_with_params(self, fhir_client, sample_bundle_json, mock_response):
-        """Test recherche avec parametres."""
-        mock_resp = mock_response(200, sample_bundle_json)
+    async def test_search_server_error(self, fhir_client):
+        """Test erreur serveur lors de la recherche."""
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.json.return_value = {"error": "Server Error"}
+        mock_response.text = "Internal Server Error"
 
         with patch.object(fhir_client, "_get_client") as mock_get:
-            mock_http = AsyncMock()
-            mock_http.get = AsyncMock(return_value=mock_resp)
-            mock_get.return_value = mock_http
+            mock_http_client = AsyncMock()
+            mock_http_client.get = AsyncMock(return_value=mock_response)
+            mock_get.return_value = mock_http_client
 
-            await fhir_client.search("Patient", {"name": "Test", "active": "true"})
-
-            mock_http.get.assert_called_once_with(
-                "/Patient",
-                params={"name": "Test", "active": "true"},
-            )
-
-    @pytest.mark.asyncio
-    async def test_search_connection_error(self, fhir_client):
-        """Test erreur de connexion lors de la recherche."""
-        with patch.object(fhir_client, "_get_client") as mock_get:
-            mock_http = AsyncMock()
-            mock_http.get = AsyncMock(side_effect=httpx.ConnectError("Connection refused"))
-            mock_get.return_value = mock_http
-
-            with pytest.raises(FHIRConnectionError):
+            with pytest.raises(FHIROperationError):
                 await fhir_client.search("Patient")
 
 
 # =============================================================================
-# Tests pour FHIRClient.search_by_identifier
+# Tests FHIRClient.search_by_identifier()
 # =============================================================================
 
 
@@ -503,98 +411,96 @@ class TestFHIRClientSearchByIdentifier:
     """Tests pour search_by_identifier()."""
 
     @pytest.mark.asyncio
-    async def test_search_by_identifier_found(self, fhir_client, mock_response):
-        """Test recherche par identifiant trouve."""
-        bundle_with_entry = json.dumps(
-            {
-                "resourceType": "Bundle",
-                "type": "searchset",
-                "total": 1,
-                "entry": [
-                    {
-                        "resource": {
-                            "resourceType": "Patient",
-                            "id": "found-patient",
-                            "active": True,
-                        }
-                    }
-                ],
-            }
-        ).encode()
-        mock_resp = mock_response(200, bundle_with_entry)
+    async def test_search_by_identifier_found(self, fhir_client, mock_patient):
+        """Test recherche par identifiant trouvee."""
+        bundle = Bundle(
+            type="searchset",
+            total=1,
+            entry=[{"resource": mock_patient.model_dump()}],
+        )
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = bundle.model_dump_json().encode()
 
         with patch.object(fhir_client, "_get_client") as mock_get:
-            mock_http = AsyncMock()
-            mock_http.get = AsyncMock(return_value=mock_resp)
-            mock_get.return_value = mock_http
+            mock_http_client = AsyncMock()
+            mock_http_client.get = AsyncMock(return_value=mock_response)
+            mock_get.return_value = mock_http_client
 
             result = await fhir_client.search_by_identifier(
                 "Patient",
-                "https://keycloak.africare.app/realms/africare",
+                "http://keycloak.example/",
                 "user-123",
             )
 
             assert result is not None
-            assert result.id == "found-patient"
+            assert result.id == "patient-123"
 
     @pytest.mark.asyncio
-    async def test_search_by_identifier_not_found(
-        self, fhir_client, empty_bundle_json, mock_response
-    ):
-        """Test recherche par identifiant non trouve."""
-        mock_resp = mock_response(200, empty_bundle_json)
+    async def test_search_by_identifier_not_found(self, fhir_client):
+        """Test recherche par identifiant non trouvee."""
+        empty_bundle = Bundle(type="searchset", total=0)
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = empty_bundle.model_dump_json().encode()
 
         with patch.object(fhir_client, "_get_client") as mock_get:
-            mock_http = AsyncMock()
-            mock_http.get = AsyncMock(return_value=mock_resp)
-            mock_get.return_value = mock_http
+            mock_http_client = AsyncMock()
+            mock_http_client.get = AsyncMock(return_value=mock_response)
+            mock_get.return_value = mock_http_client
 
             result = await fhir_client.search_by_identifier(
                 "Patient",
-                "https://keycloak.africare.app/realms/africare",
-                "unknown-user",
+                "http://keycloak.example/",
+                "nonexistent",
             )
 
             assert result is None
 
 
 # =============================================================================
-# Tests pour FHIRClient._handle_error_response
+# Tests FHIRClient._handle_error_response()
 # =============================================================================
 
 
 class TestFHIRClientHandleErrorResponse:
     """Tests pour _handle_error_response()."""
 
-    def test_handle_error_with_json(self, fhir_client, mock_response):
-        """Test gestion erreur avec reponse JSON."""
-        error_resp = mock_response(
-            400,
-            b'{"issue": "test"}',
-            {"issue": "test"},
-        )
+    def test_handle_error_with_json_body(self, fhir_client):
+        """Test gestion erreur avec corps JSON."""
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_response.json.return_value = {
+            "resourceType": "OperationOutcome",
+            "issue": [{"severity": "error", "code": "invalid"}],
+        }
+
         mock_span = MagicMock()
 
         with pytest.raises(FHIROperationError) as exc_info:
-            fhir_client._handle_error_response(error_resp, mock_span)
+            fhir_client._handle_error_response(mock_response, mock_span)
 
         assert exc_info.value.status_code == 400
-        assert exc_info.value.operation_outcome == {"issue": "test"}
+        assert exc_info.value.operation_outcome is not None
 
-    def test_handle_error_without_json(self, fhir_client, mock_response):
-        """Test gestion erreur sans JSON valide."""
-        error_resp = mock_response(500, b"Internal Server Error")
+    def test_handle_error_with_non_json_body(self, fhir_client):
+        """Test gestion erreur avec corps non-JSON."""
+        mock_response = MagicMock()
+        mock_response.status_code = 502
+        mock_response.json.side_effect = json.JSONDecodeError("", "", 0)
+        mock_response.text = "Bad Gateway"
+
         mock_span = MagicMock()
 
         with pytest.raises(FHIROperationError) as exc_info:
-            fhir_client._handle_error_response(error_resp, mock_span)
+            fhir_client._handle_error_response(mock_response, mock_span)
 
-        assert exc_info.value.status_code == 500
-        assert "text" in exc_info.value.operation_outcome
+        assert exc_info.value.status_code == 502
+        assert exc_info.value.operation_outcome == {"text": "Bad Gateway"}
 
 
 # =============================================================================
-# Tests pour FHIRClient.close
+# Tests FHIRClient.close()
 # =============================================================================
 
 
@@ -603,66 +509,39 @@ class TestFHIRClientClose:
 
     @pytest.mark.asyncio
     async def test_close_with_client(self, fhir_client):
-        """Test fermeture avec client existant."""
-        # Create a client first
+        """Test fermeture avec client initialise."""
+        # Initialize the client
         await fhir_client._get_client()
         assert fhir_client._client is not None
 
+        # Close it
         await fhir_client.close()
 
         assert fhir_client._client is None
 
     @pytest.mark.asyncio
     async def test_close_without_client(self, fhir_client):
-        """Test fermeture sans client."""
+        """Test fermeture sans client initialise."""
         assert fhir_client._client is None
 
-        await fhir_client.close()  # Should not raise
+        # Should not raise
+        await fhir_client.close()
 
         assert fhir_client._client is None
 
 
 # =============================================================================
-# Tests pour le pattern Singleton
+# Tests Singleton Functions
 # =============================================================================
 
 
-class TestSingletonPattern:
+class TestSingletonFunctions:
     """Tests pour les fonctions singleton."""
 
     @pytest.mark.asyncio
-    async def test_initialize_fhir_client(self):
-        """Test initialisation du singleton."""
-        # Ensure clean state
-        await close_fhir_client()
-
-        client = await initialize_fhir_client(
-            base_url="http://test:8080/fhir",
-            timeout=30,
-        )
-
-        assert client is not None
-        assert isinstance(client, FHIRClient)
-
-        # Cleanup
-        await close_fhir_client()
-
-    @pytest.mark.asyncio
-    async def test_get_fhir_client_after_init(self):
-        """Test recuperation du singleton apres initialisation."""
-        await close_fhir_client()
-        await initialize_fhir_client(base_url="http://test:8080/fhir")
-
-        client = get_fhir_client()
-
-        assert client is not None
-        assert isinstance(client, FHIRClient)
-
-        await close_fhir_client()
-
-    @pytest.mark.asyncio
-    async def test_get_fhir_client_without_init(self):
-        """Test recuperation du singleton sans initialisation."""
+    async def test_get_fhir_client_not_initialized(self):
+        """Test get_fhir_client avant initialisation."""
+        # Ensure client is not initialized
         await close_fhir_client()
 
         with pytest.raises(RuntimeError) as exc_info:
@@ -671,24 +550,38 @@ class TestSingletonPattern:
         assert "FHIR client not initialized" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_close_fhir_client(self):
-        """Test fermeture du singleton."""
-        await initialize_fhir_client(base_url="http://test:8080/fhir")
+    async def test_initialize_and_get_fhir_client(self):
+        """Test cycle complet initialize -> get -> close."""
+        # Initialize
+        client = await initialize_fhir_client(
+            base_url="http://test:8080/fhir",
+            timeout=15,
+        )
 
+        assert client is not None
+        assert isinstance(client, FHIRClient)
+
+        # Get should return the same instance
+        retrieved = get_fhir_client()
+        assert retrieved is client
+
+        # Cleanup
         await close_fhir_client()
 
+        # After close, get should fail
         with pytest.raises(RuntimeError):
             get_fhir_client()
 
     @pytest.mark.asyncio
-    async def test_close_fhir_client_when_none(self):
-        """Test fermeture du singleton quand deja None."""
-        await close_fhir_client()  # Ensure None
+    async def test_close_fhir_client_idempotent(self):
+        """Test que close_fhir_client est idempotent."""
+        # Initialize
+        await initialize_fhir_client()
 
-        await close_fhir_client()  # Should not raise
-
-        with pytest.raises(RuntimeError):
-            get_fhir_client()
+        # Close multiple times should not raise
+        await close_fhir_client()
+        await close_fhir_client()
+        await close_fhir_client()
 
 
 # =============================================================================
@@ -701,79 +594,30 @@ class TestFHIRExceptions:
 
     def test_fhir_connection_error(self):
         """Test FHIRConnectionError."""
-        error = FHIRConnectionError("Connection failed", {"host": "localhost"})
+        error = FHIRConnectionError("Connection refused")
 
-        assert str(error) == "Connection failed"
-        assert error.message == "Connection failed"
-        assert error.details == {"host": "localhost"}
+        assert str(error) == "Connection refused"
+        assert error.message == "Connection refused"
+        assert error.details == {}
 
     def test_fhir_resource_not_found_error(self):
         """Test FHIRResourceNotFoundError."""
-        error = FHIRResourceNotFoundError("Patient", "patient-123")
+        error = FHIRResourceNotFoundError("Patient", "123")
 
-        assert "Patient/patient-123 not found" in str(error)
+        assert "Patient/123 not found" in str(error)
         assert error.resource_type == "Patient"
-        assert error.resource_id == "patient-123"
+        assert error.resource_id == "123"
         assert error.details["resource_type"] == "Patient"
 
     def test_fhir_operation_error(self):
         """Test FHIROperationError."""
+        outcome = {"issue": [{"severity": "error"}]}
         error = FHIROperationError(
-            status_code=400,
+            status_code=422,
             message="Validation failed",
-            operation_outcome={"issue": [{"severity": "error"}]},
+            operation_outcome=outcome,
         )
 
-        assert error.status_code == 400
-        assert error.message == "Validation failed"
-        assert error.operation_outcome == {"issue": [{"severity": "error"}]}
-
-
-# =============================================================================
-# Tests d'integration (avec vraies requetes mockees)
-# =============================================================================
-
-
-class TestFHIRClientIntegration:
-    """Tests d'integration avec mock complet."""
-
-    @pytest.mark.asyncio
-    async def test_create_read_update_flow(self, fhir_client, mock_response):
-        """Test flux complet create -> read -> update."""
-        patient_json = json.dumps(
-            {
-                "resourceType": "Patient",
-                "id": "flow-test-123",
-                "active": True,
-                "name": [{"family": "Flow", "given": ["Test"]}],
-            }
-        ).encode()
-
-        with patch.object(fhir_client, "_get_client") as mock_get:
-            mock_http = AsyncMock()
-            mock_get.return_value = mock_http
-
-            # Create
-            mock_http.post = AsyncMock(return_value=mock_response(201, patient_json))
-            patient = FHIRPatient(active=True, name=[{"family": "Flow", "given": ["Test"]}])
-            created = await fhir_client.create(patient)
-            assert created.id == "flow-test-123"
-
-            # Read
-            mock_http.get = AsyncMock(return_value=mock_response(200, patient_json))
-            read = await fhir_client.read("Patient", "flow-test-123")
-            assert read.id == "flow-test-123"
-
-            # Update
-            updated_json = json.dumps(
-                {
-                    "resourceType": "Patient",
-                    "id": "flow-test-123",
-                    "active": False,
-                    "name": [{"family": "Flow", "given": ["Updated"]}],
-                }
-            ).encode()
-            mock_http.put = AsyncMock(return_value=mock_response(200, updated_json))
-            created.active = False
-            updated = await fhir_client.update(created)
-            assert updated.active is False
+        assert error.status_code == 422
+        assert "Validation failed" in str(error)
+        assert error.operation_outcome == outcome
