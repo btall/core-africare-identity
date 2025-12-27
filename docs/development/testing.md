@@ -38,6 +38,28 @@ Pour éviter les conflits avec les services de développement, les tests utilise
 |---------|-------------------|-----------|
 | PostgreSQL | 5432 | **5433** |
 | Redis | 6379 | **6380** |
+| HAPI FHIR | 8080 | **8081** |
+
+### Architecture FHIR Hybride
+
+Depuis la migration FHIR (décembre 2025), les tests doivent couvrir:
+
+```mermaid
+graph LR
+    TEST[Test] --> PG[(PostgreSQL)]
+    TEST --> FHIR[HAPI FHIR]
+    TEST --> RD[(Redis)]
+
+    PG --> GDPR[GDPR Metadata]
+    FHIR --> PAT[Patient/Practitioner]
+
+    style FHIR fill:#e1f5fe
+    style PG fill:#fff3e0
+```
+
+- **PostgreSQL**: Métadonnées GDPR (patient_gdpr_metadata, professional_gdpr_metadata)
+- **HAPI FHIR**: Données démographiques (Patient, Practitioner resources)
+- **Redis**: Cache et messaging (Pub/Sub, Streams)
 
 ## Utilisation
 
@@ -195,6 +217,79 @@ poetry run pytest -m asyncio
 
 - **`test_env`** : Variables d'environnement de test
 - **`test_ports`** : Ports des services de test
+
+### HAPI FHIR
+
+- **`fhir_client`** : Client FHIR async pour tests d'intégration
+- **`fhir_test_patient`** : Patient FHIR de test, auto-supprimé après test
+
+## Tests FHIR
+
+### Configuration docker-compose.test.yaml
+
+```yaml
+services:
+  hapi-fhir-test:
+    image: hapiproject/hapi:latest
+    ports:
+      - "8081:8080"
+    environment:
+      - hapi.fhir.default_encoding=json
+      - hapi.fhir.allow_external_references=true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/fhir/metadata"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+```
+
+### Exemple test FHIR
+
+```python
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_create_patient_in_fhir(fhir_client, db_session):
+    """Test création patient via architecture hybride."""
+    from app.services.patient_service import create_patient
+    from app.schemas.patient import PatientCreate
+
+    patient_data = PatientCreate(
+        keycloak_user_id="test-fhir-123",
+        first_name="Amadou",
+        last_name="Diallo",
+        email="amadou@example.sn",
+        phone="+221771234567",
+        gender="male",
+        date_of_birth="1990-05-15",
+        country="Senegal",
+        preferred_language="fr"
+    )
+
+    # Crée dans FHIR + PostgreSQL GDPR metadata
+    result = await create_patient(db=db_session, patient_data=patient_data)
+
+    # Vérifier PostgreSQL (GDPR metadata)
+    assert result.id is not None
+
+    # Vérifier FHIR (données démographiques)
+    fhir_patient = await fhir_client.read("Patient", result.fhir_resource_id)
+    assert fhir_patient.name[0].given[0] == "Amadou"
+    assert fhir_patient.name[0].family == "Diallo"
+```
+
+### Tests avec skip markers
+
+Pour les tests qui utilisent l'ancien modèle Patient/Professional (avant migration FHIR):
+
+```python
+@pytest.mark.skip(
+    reason="Test utilise ancien modèle - à migrer vers FHIR + GDPR metadata"
+)
+@pytest.mark.asyncio
+async def test_old_model_feature(db_session):
+    # Ce test sera ignoré jusqu'à migration
+    pass
+```
 
 ## Couverture de code
 

@@ -311,10 +311,12 @@ async def list_soft_deleted_professionals(
     statuses = []
     for gdpr in gdpr_records:
         # Récupérer email depuis FHIR
-        email = None
+        email = "[Email non disponible]"  # Fallback si FHIR échoue
         try:
             fhir_practitioner = await fhir_client.read("Practitioner", gdpr.fhir_resource_id)
-            email = _extract_email_from_fhir(fhir_practitioner)
+            extracted_email = _extract_email_from_fhir(fhir_practitioner)
+            if extracted_email:
+                email = extracted_email
         except Exception as e:
             logger.warning(
                 f"Impossible de récupérer FHIR Practitioner {gdpr.fhir_resource_id}: {e}"
