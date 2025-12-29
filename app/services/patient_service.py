@@ -13,6 +13,8 @@ from opentelemetry import trace
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import cache_get, cache_key_patient, cache_set
+from app.core.config import settings
 from app.core.events import publish
 from app.infrastructure.fhir.client import get_fhir_client
 from app.infrastructure.fhir.exceptions import FHIRResourceNotFoundError
@@ -113,10 +115,12 @@ async def get_patient(
     """
     Recupere un patient par son ID numerique local.
 
-    Pattern:
-    1. Lookup local pour obtenir fhir_resource_id
-    2. Fetch depuis HAPI FHIR
-    3. Combiner avec metadonnees GDPR
+    Pattern (avec cache):
+    1. Verifier cache Redis
+    2. Si miss: Lookup local pour obtenir fhir_resource_id
+    3. Fetch depuis HAPI FHIR
+    4. Combiner avec metadonnees GDPR
+    5. Mettre en cache
 
     Args:
         db: Session de base de donnees async
@@ -129,7 +133,14 @@ async def get_patient(
     with tracer.start_as_current_span("get_patient") as span:
         span.set_attribute("patient.id", patient_id)
 
-        # 1. Lookup local
+        # 1. Verifier cache Redis
+        cache_key = cache_key_patient(patient_id)
+        cached_json = await cache_get(cache_key)
+        if cached_json:
+            span.add_event("Cache HIT")
+            return PatientResponse.model_validate_json(cached_json)
+
+        # 2. Cache MISS - Lookup local
         result = await db.execute(
             select(PatientGdprMetadata).where(
                 PatientGdprMetadata.id == patient_id,
@@ -142,7 +153,7 @@ async def get_patient(
             span.add_event("Patient non trouve (local)")
             return None
 
-        # 2. Fetch depuis HAPI FHIR
+        # 3. Fetch depuis HAPI FHIR
         fhir_patient = await fhir_client.read("Patient", gdpr_metadata.fhir_resource_id)
         if not fhir_patient:
             span.add_event("Patient non trouve (FHIR)")
@@ -150,12 +161,17 @@ async def get_patient(
 
         span.add_event("Patient trouve")
 
-        # 3. Combiner avec metadonnees GDPR
-        return PatientMapper.from_fhir(
+        # 4. Combiner avec metadonnees GDPR
+        response = PatientMapper.from_fhir(
             fhir_patient,
             local_id=gdpr_metadata.id,
             gdpr_metadata=gdpr_metadata.to_dict(),
         )
+
+        # 5. Mettre en cache
+        await cache_set(cache_key, response.model_dump_json(), ttl=settings.CACHE_TTL_PATIENT)
+
+        return response
 
 
 async def get_patient_by_keycloak_id(

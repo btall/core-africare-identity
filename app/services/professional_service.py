@@ -13,6 +13,8 @@ from opentelemetry import trace
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import cache_get, cache_key_professional, cache_set
+from app.core.config import settings
 from app.core.events import publish
 from app.infrastructure.fhir.client import get_fhir_client
 from app.infrastructure.fhir.exceptions import FHIRResourceNotFoundError
@@ -116,10 +118,12 @@ async def get_professional(
     """
     Recupere un professionnel par son ID numerique local.
 
-    Pattern:
-    1. Lookup local pour obtenir fhir_resource_id
-    2. Fetch depuis HAPI FHIR
-    3. Combiner avec metadonnees GDPR
+    Pattern (avec cache):
+    1. Verifier cache Redis
+    2. Si miss: Lookup local pour obtenir fhir_resource_id
+    3. Fetch depuis HAPI FHIR
+    4. Combiner avec metadonnees GDPR
+    5. Mettre en cache
 
     Args:
         db: Session de base de donnees async
@@ -132,7 +136,14 @@ async def get_professional(
     with tracer.start_as_current_span("get_professional") as span:
         span.set_attribute("professional.id", professional_id)
 
-        # 1. Lookup local
+        # 1. Verifier cache Redis
+        cache_key = cache_key_professional(professional_id)
+        cached_json = await cache_get(cache_key)
+        if cached_json:
+            span.add_event("Cache HIT")
+            return ProfessionalResponse.model_validate_json(cached_json)
+
+        # 2. Cache MISS - Lookup local
         result = await db.execute(
             select(ProfessionalGdprMetadata).where(
                 ProfessionalGdprMetadata.id == professional_id,
@@ -145,7 +156,7 @@ async def get_professional(
             span.add_event("Professionnel non trouve (local)")
             return None
 
-        # 2. Fetch depuis HAPI FHIR
+        # 3. Fetch depuis HAPI FHIR
         fhir_practitioner = await fhir_client.read("Practitioner", gdpr_metadata.fhir_resource_id)
         if not fhir_practitioner:
             span.add_event("Professionnel non trouve (FHIR)")
@@ -153,12 +164,17 @@ async def get_professional(
 
         span.add_event("Professionnel trouve")
 
-        # 3. Combiner avec metadonnees GDPR
-        return ProfessionalMapper.from_fhir(
+        # 4. Combiner avec metadonnees GDPR
+        response = ProfessionalMapper.from_fhir(
             fhir_practitioner,
             local_id=gdpr_metadata.id,
             gdpr_metadata=gdpr_metadata.to_dict(),
         )
+
+        # 5. Mettre en cache
+        await cache_set(cache_key, response.model_dump_json(), ttl=settings.CACHE_TTL_PROFESSIONAL)
+
+        return response
 
 
 async def get_professional_by_keycloak_id(
