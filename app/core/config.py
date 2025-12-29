@@ -137,6 +137,13 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379"
     REDIS_DB: int = 0
 
+    # Cache Configuration (TTL-only invalidation)
+    CACHE_ENABLED: bool = True
+    CACHE_TTL_DEFAULT: int = 300  # 5 minutes (fallback)
+    CACHE_TTL_PATIENT: int = 600  # 10 minutes
+    CACHE_TTL_PROFESSIONAL: int = 600  # 10 minutes
+    CACHE_TTL_STATS_DASHBOARD: int = 300  # 5 minutes
+
     # HAPI FHIR Server Configuration
     HAPI_FHIR_BASE_URL: str = "http://localhost:8080/fhir"
     HAPI_FHIR_TIMEOUT: int = 30  # Timeout en secondes pour les requêtes FHIR

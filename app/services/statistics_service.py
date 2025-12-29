@@ -16,6 +16,8 @@ from opentelemetry import trace
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import cache_get, cache_key_stats_dashboard, cache_set
+from app.core.config import settings
 from app.infrastructure.fhir.client import get_fhir_client
 from app.models.gdpr_metadata import PatientGdprMetadata, ProfessionalGdprMetadata
 from app.schemas.statistics import (
@@ -194,9 +196,11 @@ async def get_dashboard_statistics(db: AsyncSession) -> DashboardStatistics:
     Cette fonction agrège uniquement les métriques principales nécessaires
     pour l'affichage rapide du dashboard.
 
-    Architecture hybride:
-    - Comptages totaux: FHIR search avec _summary=count
-    - Fallback: GDPR metadata counts
+    Architecture hybride (avec cache):
+    1. Verifier cache Redis
+    2. Si miss: Comptages totaux via FHIR search avec _summary=count
+    3. Fallback: GDPR metadata counts
+    4. Mettre en cache
 
     Args:
         db: Session de base de données async
@@ -204,7 +208,15 @@ async def get_dashboard_statistics(db: AsyncSession) -> DashboardStatistics:
     Returns:
         Statistiques globales du dashboard
     """
-    with tracer.start_as_current_span("get_dashboard_statistics"):
+    with tracer.start_as_current_span("get_dashboard_statistics") as span:
+        # 1. Verifier cache Redis
+        cache_key = cache_key_stats_dashboard()
+        cached_json = await cache_get(cache_key)
+        if cached_json:
+            span.add_event("Cache HIT")
+            return DashboardStatistics.model_validate_json(cached_json)
+
+        # 2. Cache MISS - Calculer statistiques
         # Statistiques patients via FHIR
         total_patients = await _get_fhir_count("Patient", {"active": "true"})
         active_patients = total_patients  # Query avec active=true
@@ -235,7 +247,7 @@ async def get_dashboard_statistics(db: AsyncSession) -> DashboardStatistics:
             total_professionals = result.scalar_one()
             active_professionals = total_professionals
 
-        return DashboardStatistics(
+        response = DashboardStatistics(
             total_patients=total_patients,
             active_patients=active_patients,
             inactive_patients=0,
@@ -244,3 +256,10 @@ async def get_dashboard_statistics(db: AsyncSession) -> DashboardStatistics:
             inactive_professionals=0,
             last_updated=datetime.now(UTC),
         )
+
+        # 3. Mettre en cache
+        await cache_set(
+            cache_key, response.model_dump_json(), ttl=settings.CACHE_TTL_STATS_DASHBOARD
+        )
+
+        return response
